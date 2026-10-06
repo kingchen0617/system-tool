@@ -1,0 +1,87 @@
+# system-tool MVP：RCA Engine + Prometheus + Loki + Grafana + Ollama
+# 啟動：docker compose up -d --build
+# 第一次需下載模型：docker compose exec ollama ollama pull qwen3:4b
+# 正式環境請把 image 版本 pin 住（不要用 latest）
+
+services:
+  rca-engine:
+    build: ./rca-engine
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      CONFIG_DIR: /app/config
+      RUNBOOK_DIR: /app/runbooks
+      SCENARIO_DIR: /app/scenarios
+      DATA_DIR: /app/data
+    volumes:
+      - ./config:/app/config:ro
+      - ./examples/runbooks:/app/runbooks:ro
+      - ./examples/sample-incidents:/app/scenarios:ro
+      - rca-data:/app/data
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # 若主機已安裝 Ollama（例如 Windows 本機），可刪掉此服務，
+  # 並在 .env 設定 OLLAMA_URL=http://host.docker.internal:11434
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    # 使用 NVIDIA GPU 時取消註解：
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  rca-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+  ollama-data:
