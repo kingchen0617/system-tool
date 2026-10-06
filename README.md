@@ -1,6 +1,8 @@
 # system-tool：AI SRE／自動根因分析（RCA）平台 MVP
 
-> 目前版本：**v0.2.0**（變更內容見 [CHANGELOG.md](CHANGELOG.md)）
+> 目前版本：**v0.3.0**（變更內容見 [CHANGELOG.md](CHANGELOG.md)）
+>
+> **商業授權軟體**：本軟體為專有軟體，依 [LICENSE](LICENSE) 及 [EULA](EULA.md) 授權使用。授權機制說明見 [LICENSING.md](LICENSING.md)；第三方元件授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 用 AI 做系統監控的第一版。它能做到三件事：
 
@@ -143,6 +145,22 @@ curl -X POST localhost:8000/changes -H 'Content-Type: application/json' \
 
 ---
 
+## 授權（v0.3）
+
+採用「地端安裝 + 線上授權」，詳細說明見 **[LICENSING.md](LICENSING.md)**。
+
+- **方案：** Community（無授權，5 個服務）／Professional／Business／Enterprise。差別在可監控的服務數、AI RCA、通知、變更關聯、RAG 等功能。
+- **啟用方式：** 設定 `LICENSE_KEY` 和 `LICENSE_SERVER_URL`，啟動後會自動線上啟用，之後每 12 小時續驗一次。
+- **離線容忍：** 連不上授權伺服器時，租期（7 天）內正常運作，之後還有 14 天寬限期，過了才降級為 Community。降級不會停止監控。
+- **離線授權：** Enterprise 方案可使用離線授權，不需連線。
+- **授權伺服器：** 程式在 `license-server/`，由賣方部署，**不可交給客戶**。
+
+```bash
+python -m app.cli license status                 # 查看授權
+python -m app.cli license activate ST1.xxxx...   # 啟用
+curl localhost:8000/license
+```
+
 ## API
 
 | Method | Path | 說明 |
@@ -158,7 +176,13 @@ curl -X POST localhost:8000/changes -H 'Content-Type: application/json' \
 | POST | `/test/incident` | 執行模擬情境 `{"scenario":"db-latency","notify":false,"use_llm":true}` |
 | POST | `/changes` | 登錄部署或設定變更 |
 | POST | `/maintenance` | 設定維護時段 `{"service":"mariadb","minutes":60}` |
-| POST | `/incidents/{id}/feedback` | 工程師回饋 RCA 是否正確，累積評估資料集 |
+| POST | `/incidents/{id}/feedback` | 工程師回饋 RCA 是否正確，累積評估資料集（Business 以上） |
+| GET | `/license` | 授權狀態、生效方案、功能、監控中的服務 |
+| POST | `/license` | 設定 License Key 並線上啟用 |
+| POST | `/license/refresh` | 立即續驗 |
+| POST | `/license/deactivate` | 停用本機（換主機前執行） |
+
+`/changes`、`/maintenance` 需要 Professional 以上；目前方案不含該功能時回傳 HTTP 402。設定 `ENGINE_ADMIN_TOKEN` 後，`/license` 的 POST 操作需帶 `X-Admin-Token` header。
 
 ### RCA 輸出格式
 
@@ -264,9 +288,15 @@ system-tool/
 │   │   ├── knowledge.py       # Runbook 檢索（RAG v0）
 │   │   ├── notifications.py   # Slack / LINE / Email
 │   │   ├── store.py           # 事件儲存（JSON）
+│   │   ├── licensing.py       # 授權用戶端（簽章驗證、線上啟用、方案限制）
+│   │   ├── license_keys.py    # 授權方公鑰
 │   │   ├── models.py          # Pydantic schema
 │   │   └── config.py
 │   └── tests/test_rca.py
+├── license-server/            # 授權伺服器 + 簽發工具（賣方使用，不出貨給客戶）
+│   ├── app/{tokens,core,editions,admin,main}.py
+│   └── docker-compose.yml
+├── LICENSE / EULA.md / LICENSING.md / THIRD_PARTY_NOTICES.md
 ├── observability/             # Prometheus / Loki / Grafana 設定
 └── examples/
     ├── runbooks/              # Markdown runbook（含 front matter）
@@ -278,6 +308,8 @@ system-tool/
 ## Roadmap
 
 - [x] v0.2：LLM 只能引用證據 ID、PromQL 修正、多候選 RCA、評分去重、穩健 baseline（median＋MAD＋guard band）
+- [x] v0.3：商業授權（線上啟用 + 離線授權、方案分級、授權伺服器、EULA、第三方授權聲明）
+- [ ] 出貨強化：Nuitka／Cython 編譯核心模組、只提供簽章過的 Docker image、自動產生 SBOM
 - [ ] Tempo／OpenTelemetry traces，加入 `query_tempo` 工具，補上真正的 DB／upstream latency
 - [ ] 季節性 baseline（同時段、上週同時段）
 - [ ] AWS connector：CloudWatch、CloudTrail、AWS Config、AWS Health

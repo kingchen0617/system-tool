@@ -1,0 +1,20 @@
+system-tool — Proprietary Software License
+
+Copyright (c) 2026 [授權方名稱 / LICENSOR NAME]. All rights reserved.
+
+本軟體（含原始碼、目的碼、文件、設定範本、模型提示詞與相關資料，以下稱「本軟體」）
+為 [授權方名稱] 之專有財產，受著作權法及相關法律保護。
+
+1. 未經 [授權方名稱] 事前書面同意，任何人不得重製、修改、改作、散布、
+   公開傳輸、出租、出借、轉授權、販售或以其他方式利用本軟體之全部或一部。
+2. 本軟體僅得依 [授權方名稱] 與被授權人所簽訂之《system-tool 終端使用者授權合約》
+   （EULA，見 EULA.md）或其他書面授權契約使用。
+3. 不得規避、停用、移除或竄改本軟體之授權驗證機制（License Key、線上啟用、
+   數位簽章、使用上限等）。
+4. 本軟體所含之第三方開源元件，依其各自之授權條款使用，詳見 THIRD_PARTY_NOTICES.md；
+   本授權不限制您依各該開源授權條款所享有之權利。
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXCEPT AS EXPRESSLY
+PROVIDED IN A SEPARATE WRITTEN AGREEMENT WITH THE LICENSOR.
+
+聯絡方式：[Email / 公司地址]

@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.0 — 2026-10-07｜Commercial Foundation
+
+依與 ChatGPT 討論的商業模式，加入地端安裝 + 線上授權機制。
+
+- **授權用戶端**（`rca-engine/app/licensing.py`）
+  - 用 Ed25519 驗證 License Key，公鑰寫在程式裡（`license_keys.py`）。
+  - 線上啟用並定期續驗：activation token 綁定本機，租期 7 天，到期後還有寬限期。
+  - 離線授權（Enterprise）。
+  - 7 種授權狀態；授權失效時降級為 Community，不會停止監控。
+  - 防護：防止時間回撥、偵測啟用資料被複製到其他主機。
+  - 本機稽核紀錄（`data/license-audit.jsonl`），使用量統計需客戶 opt-in 才會傳送。
+- **方案限制**（`engine.py`）
+  - 依方案限制受監控服務數，超出時依重要度挑選。
+  - AI RCA、Slack／LINE／Email 通知、歷史事件檢索依授權開關。
+  - `/changes`、`/maintenance`、`/feedback` 需要對應方案，否則回傳 HTTP 402。
+- **API／CLI**
+  - 新增 `GET/POST /license`、`/license/refresh`、`/license/deactivate`。
+  - `/health` 和首頁顯示授權狀態。
+  - 新增 `cli license status|activate|refresh|deactivate`。
+  - 設定 `ENGINE_ADMIN_TOKEN` 後，修改授權的 API 需帶 `X-Admin-Token`。
+- **授權伺服器**（`license-server/`，賣方使用）
+  - 用 SQLite 記錄授權、啟用與稽核資料。
+  - 客戶端 API：activate、deactivate。
+  - 管理 API：簽發、列表、詳情、撤銷、稽核。
+  - 管理 CLI：`keygen`、`issue`、`list`、`show`、`revoke`、`inspect`。
+  - Docker Compose 部署。
+- **法律文件**：`LICENSE`（專有授權）、`EULA.md`（中文草稿，需律師審閱）、`THIRD_PARTY_NOTICES.md`（含 Grafana／Loki AGPL 注意事項）、`LICENSING.md`。
+- **測試**：rca-engine 28 個（新增 12 個端對端授權測試）＋ license-server 5 個。
+
 ## v0.2.0 — 2026-10-06
 
 依 ChatGPT 對 v0.1 的 code review，修正 5 個重點問題（依優先順序）：
