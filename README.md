@@ -1,5 +1,7 @@
 # system-tool：AI SRE／自動根因分析（RCA）平台 MVP
 
+> 目前版本：**v0.2.0**（變更內容見 [CHANGELOG.md](CHANGELOG.md)）
+
 用 AI 做系統監控的第一版。它能做到三件事：
 
 1. **自動判斷系統健康狀態**：固定門檻加上動態基準（z-score），並用多訊號評分來降低誤報。
@@ -21,27 +23,49 @@
                 └──────┬──────────┘
                        ▼
 ┌──────────────────── rca-engine（Python / FastAPI）────────────────────┐
-│ 1. Detection   rules.yaml：固定門檻（需持續 for 秒）+ z-score 動態基準   │
+│ 1. Detection   rules.yaml：固定門檻（需持續 for 秒）+ 穩健 z-score 基準 │
 │ 2. Correlation topology.yaml：把異常服務依依賴關係分組                  │
 │ 3. Scoring     多訊號評分 ≥5 才算 Incident（瞬間尖峰、維護中會扣分）     │
 │ 4. Agent Tools 白名單唯讀工具收集證據（全部寫入稽核紀錄）                │
 │                query_prometheus / query_loki / get_topology /          │
 │                get_dependencies / get_service_owner / search_runbook / │
 │                search_incidents / get_recent_changes                   │
-│ 5. Reasoning   Ollama/Qwen → JSON Schema 驗證 → 失敗重試 → 規則式 RCA   │
+│ 5. Reasoning   Ollama/Qwen（只能引用證據 ID）→ 驗證 → 重試 → 規則式 RCA │
 │ 6. Notify      依 owner + severity 路由到 Slack / LINE / Email         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### RCA 推理邏輯
 
-- `depends_on` 表示「我呼叫誰」。下游故障會往上游傳遞，所以**依賴都正常的那個異常服務，就是 root cause 候選**。
+- `depends_on` 表示「我呼叫誰」。下游故障會往上游傳遞，所以依賴都正常的異常服務最可能是 root cause。
+- **多候選排序**：每個異常服務都會計算候選分數，最後依分數排序，不會只硬選一個。
+
+  | 項目 | 說明 |
+  |---|---|
+  | downstream_health | 它的依賴全部正常 +3；有依賴也異常（較可能只是症狀）−3 |
+  | propagation | 其他異常服務中，「依賴它」（能被它解釋）的比例 × 3 |
+  | signal_strength | 異常訊號數、是否持續超標、z-score 大小 |
+  | change | 這個服務最近有部署或設定變更 |
+
+- **信心度主要看第一名領先第二名多少**：分數接近時，會列出所有接近的候選並標為 `unknown`。如果候選之間沒有依賴關係，會提示「可能是兩個獨立故障，或共同的網路／基礎設施問題」。
 - 中間節點如果自身資源正常（例如 proxy CPU 正常但逾時暴增），會被判定為「症狀」，不是原因。
 - 如果只有應用程式本身異常、依賴全部正常，而且 30 分鐘內有部署，就判定為部署回歸（regression）。
 - 信心度分三級：≥85% 為 `likely`（高度可能），60–84% 為 `suspected`（疑似），<60% 為 `unknown`（證據不足，不會假裝知道）。
-- 防幻覺設計：
-  - LLM 指認的元件必須存在於拓撲中，否則驗證失敗，改用規則式結果。
-  - 如果 LLM 指認的元件沒有任何異常證據，信心度會被強制壓到 0.5 以下。
+
+### LLM 防幻覺：只推理，不創造事實
+
+1. 收集到的每個事實（指標、log、變更、runbook、歷史事件）都會給一個 ID，例如 `sig_provider-latency`、`log_proxy_0`、`chg_0`。
+2. LLM 只能回傳 `evidence_ids`，不能自己寫證據。證據內容由 Python 從已收集的資料重新組裝。
+3. 下列情況都算驗證失敗：引用不存在的 ID、指認拓撲中不存在的服務、把有異常訊號的服務列進 `ruled_out`。驗證失敗會重試一次，仍失敗就改用規則式 RCA。
+4. 如果 LLM 指認的元件沒有異常訊號，或它引用的證據都和這個元件無關，信心度會被壓到 0.5 以下。
+
+LLM 回傳格式：
+
+```json
+{"suspected_component": "provider-api", "root_cause": "…", "confidence": 0.9,
+ "evidence_ids": ["sig_provider-latency", "sig_proxy-cpu", "log_proxy_0"],
+ "ruled_out": ["redis", "mariadb"], "recommended_actions": ["…"]}
+```
 
 ---
 
@@ -105,7 +129,10 @@ curl -X POST localhost:8000/test/incident -H 'Content-Type: application/json' \
 1. **Prometheus**：在 `observability/prometheus/prometheus.yml` 加入 exporters，包括 node_exporter、mysqld_exporter、redis_exporter、nginx exporter，以及應用程式的 `/metrics`。記得用 `service` label 對應 topology 的 id。
 2. **Loki**：用 Promtail／Grafana Alloy 收集 log，並加上 `service="<topology id>"` label。
 3. **`config/topology.yaml`**：描述服務、負責人（owner）、依賴（depends_on）和重要度（criticality）。
-4. **`config/rules.yaml`**：每條規則寫一個 PromQL（必須回傳單一序列），再設定門檻、持續時間和 z-score。
+4. **`config/rules.yaml`**：每條規則寫一個 PromQL（必須回傳單一序列，請先用 `sum`／`max` 聚合），再設定門檻、持續時間和 z-score。
+   - CPU 規則用的 `service` label，必須在 `prometheus.yml` 的 scrape target 加上 `labels: { service: ... }`，否則會一直沒有資料。
+   - 部署後先跑 `python -m app.cli detect --no-llm` 或打開 `GET /services`，檢查有沒有 `NO DATA` 的規則。
+   - `db-slow-query-rate` 量的是每秒新增的慢查詢數，不是查詢延遲本身。真正的 DB 延遲要等 v0.3 接上 trace 或 query duration histogram 後補上。
 5. **`config/notifications.yaml`**：設定 owner 對應的通知管道和收件人。
 6. **CI/CD**：部署完成後呼叫 `POST /changes`，RCA 才能關聯「最近變更」：
 
@@ -159,29 +186,52 @@ curl -X POST localhost:8000/changes -H 'Content-Type: application/json' \
 
 ## 降低誤報的評分機制（`rules.yaml → scoring`）
 
+每一項代表一個**獨立的證據**。訊號種類本身（例如「是錯誤率」）不會加分，避免重複計分。
+
 | 條件 | 分數 |
 |---|---|
 | 固定門檻「持續」超標（整段 `for` 期間） | +2 |
-| z-score 動態基準異常 | +2 |
-| 錯誤率類訊號 | +2 |
-| 延遲類訊號 | +2 |
+| 動態基準異常（和門檻高度相關，只加 1） | +1 |
+| critical 規則超過門檻 2 倍以上 | +2 |
+| 兩種以上不同類型的訊號（latency／errors／saturation）同時異常 | +2 |
 | 有依賴關係的多個服務同時異常 | +2 |
 | 30 分鐘內有部署／設定變更 | +1 |
 | 只是瞬間尖峰 | −2 |
 | 維護中（全部異常服務都在維護 → 直接抑制） | −5 |
 
-**≥5 為 Incident，會通知**；3–4 為 Warning，只記錄不通知；<3 會被抑制。同一事件在 cooldown 期間（預設 30 分鐘）內不重複通知。
+**≥5 為 Incident，會通知**；3–4 為 Warning，只記錄不通知；<3 會被抑制。
+
+舉例：單一訊號輕微超標只有 2+1 = 3 分，是 Warning；API 5xx 衝到 40% 則是 2+1+2 = 5 分，會通知。
+
+### 動態基準（穩健 z-score）
+
+```
+|←──────── baseline（window, 預設 60 分）────────→|←─ guard（10 分）─→|←─ recent（for, 5 分）─→| now
+z = (recent 平均 − baseline 中位數) / (1.4826 × MAD)
+```
+
+- **guard band**：事故已經持續一段時間時，前段的異常資料不會被算進 baseline，避免 z-score 被拉低。
+- **median + MAD**：比平均值加標準差更不受歷史尖峰影響。同一事件在 cooldown 期間（預設 30 分鐘）內不重複通知。
 
 ---
 
 ## 模擬情境與驗收
 
-`examples/sample-incidents/` 目前有 8 個情境：服務商逾時、DB 慢查詢、DB 連線耗盡、Redis 延遲、部署回歸、Proxy 資源耗盡、CPU 瞬間尖峰（應抑制）、Queue 堆積（只列 Warning）。
+`examples/sample-incidents/` 目前有 11 個情境：
+
+- **一般故障：** 服務商逾時、DB 慢查詢、DB 連線耗盡、Redis 延遲、部署回歸、Proxy 資源耗盡。
+- **v0.2 新增：**
+  - 持續 15 分鐘的 DB 問題（測 baseline 不被污染）
+  - 只有 API 5xx 但很嚴重（測單一嚴重訊號仍會通知）
+  - Redis 和 MariaDB 同時異常（測多候選時會降低信心度）
+- **不應通知：** CPU 瞬間尖峰（應抑制）、Queue 堆積（只列 Warning）。
+
+情境檔可以用 `acceptable_root_causes` 列出可接受的答案，用 `max_confidence` 設定信心度上限。模稜兩可的情境如果給出過高的信心度，會被判定為錯誤。
 
 ```
 python -m app.cli evaluate --no-llm
-Top-1 準確率：6/6 = 100%
-Top-3 準確率：6/6 = 100%
+Top-1 準確率：9/9 = 100%
+Top-3 準確率：9/9 = 100%
 誤報：0/2
 ```
 
@@ -227,7 +277,9 @@ system-tool/
 
 ## Roadmap
 
-- [ ] Tempo／OpenTelemetry traces，加入 `query_tempo` 工具
+- [x] v0.2：LLM 只能引用證據 ID、PromQL 修正、多候選 RCA、評分去重、穩健 baseline（median＋MAD＋guard band）
+- [ ] Tempo／OpenTelemetry traces，加入 `query_tempo` 工具，補上真正的 DB／upstream latency
+- [ ] 季節性 baseline（同時段、上週同時段）
 - [ ] AWS connector：CloudWatch、CloudTrail、AWS Config、AWS Health
 - [ ] 混合 LLM：本地 Qwen 信心度 <70% 時，交給雲端大模型做深度 RCA
 - [ ] RAG 換成 PostgreSQL + pgvector，納入歷史事件的相似度檢索
