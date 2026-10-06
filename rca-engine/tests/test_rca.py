@@ -21,11 +21,15 @@ DEFAULTS = {"step": 60, "for": 300, "window": 3600, "zscore": 3.0}
 
 
 def make_engine(llm: bool = False, ollama_url: str = "") -> Engine:
+    """RCA 測試一律用「全功能」授權狀態，授權本身另外在 test_licensing.py 測"""
+    from app.licensing import FEATURE_NAMES, LicenseState
     s = Settings()
     s.llm_enabled = llm
     if ollama_url:
         s.ollama_url = ollama_url
-    return Engine(s, persist=False)
+    full = LicenseState(status="valid", reason="test", edition="enterprise", features=sorted(FEATURE_NAMES),
+                        max_services=0, max_nodes=0)
+    return Engine(s, persist=False, license_state=full)
 
 
 def series(values, now=10_000.0, step=60):
