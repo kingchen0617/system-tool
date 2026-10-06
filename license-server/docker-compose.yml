@@ -1,0 +1,15 @@
+# 授權伺服器（賣方部署，例如放在你的 AWS / VPS，前面加 HTTPS）
+# 1. 產生金鑰：docker compose run --rm license-server python -m app.admin keygen
+# 2. 設定 .env 的 ADMIN_TOKEN 後啟動：docker compose up -d --build
+services:
+  license-server:
+    build: .
+    ports:
+      - "127.0.0.1:8100:8100"     # 只綁本機，由 Nginx / Cloudflare Tunnel 提供 HTTPS 對外
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?請在 .env 設定 ADMIN_TOKEN}
+      LEASE_DAYS: ${LEASE_DAYS:-7}
+    volumes:
+      - ./secrets:/srv/secrets
+      - ./data:/srv/data
+    restart: unless-stopped
