@@ -32,28 +32,51 @@ class RCAContext:
     def signals_for(self, service: str) -> list[Signal]:
         return [s for s in self.all_signals if s.service == service and not s.no_data]
 
+    def evidence_catalog(self) -> dict[str, dict[str, Any]]:
+        """所有「已觀察到的事實」，每筆有固定 ID。LLM 只能引用這些 ID，不能自己寫證據。
+
+        回傳 {id: {"service", "status", "evidence": Evidence}}
+        """
+        from .models import Evidence
+
+        cat: dict[str, dict[str, Any]] = {}
+        for svc in self.scope:
+            for s in self.signals_for(svc):
+                status = "abnormal" if s.abnormal else "normal"
+                cat[f"sig_{s.rule_id}"] = {
+                    "service": svc, "status": status,
+                    "evidence": Evidence(type="log" if s.source == "loki" else "metric", source=s.source,
+                                         description=s.describe() + ("" if s.abnormal else "（正常）"))}
+        for svc, lines in self.logs.items():
+            for i, line in enumerate(lines[:5]):
+                cat[f"log_{svc}_{i}"] = {"service": svc, "status": "abnormal",
+                                         "evidence": Evidence(type="log", source="loki", description=f"{svc} log：{line[:200]}")}
+        for i, c in enumerate(self.changes):
+            cat[f"chg_{i}"] = {"service": c.service, "status": "info",
+                               "evidence": Evidence(type="change", source="changes",
+                                                    description=f"{c.service} {c.type} @ {c.timestamp.isoformat(timespec='minutes')}：{c.description}")}
+        for r in self.runbooks:
+            cat[f"rb_{r.id}"] = {"service": ",".join(r.services), "status": "info",
+                                 "evidence": Evidence(type="runbook", source="runbook", description=f"runbook {r.id}：{r.title}")}
+        for h in self.history:
+            if h.rca:
+                cat[f"hist_{h.id}"] = {"service": h.rca.suspected_component, "status": "info",
+                                       "evidence": Evidence(type="history", source="incidents",
+                                                            description=f"歷史事件 {h.id}：{h.rca.root_cause[:120]}")}
+        return cat
+
     def to_prompt_dict(self) -> dict[str, Any]:
-        def sig(s: Signal) -> dict[str, Any]:
-            return {"rule": s.rule_id, "kind": s.kind, "current": round(s.current, 4),
-                    "baseline": None if s.baseline_mean is None else round(s.baseline_mean, 4),
-                    "zscore": None if s.zscore is None else round(s.zscore, 1),
-                    "threshold": f"{s.operator} {s.threshold}" if s.threshold is not None else None,
-                    "threshold_breached": s.threshold_breached, "anomalous": s.anomalous}
+        cat = self.evidence_catalog()
         return {
             "incident_id": self.incident.id,
             "affected_service": self.affected,
             "topology": {s: self.topo.subgraph(s)[s] for s in self.scope if self.topo.get(s)},
-            "abnormal_services": {k: [sig(s) for s in v] for k, v in self.abnormal.items()},
-            "normal_services": {k: [sig(s) for s in v] for k, v in self.normal.items()},
+            "abnormal_services": sorted(self.abnormal),
+            "normal_services": sorted(self.normal),
             "unmonitored_services": self.unmonitored,
-            "recent_logs": {k: v[:10] for k, v in self.logs.items() if v},
-            "recent_changes": [c.model_dump(mode="json") for c in self.changes],
-            "runbooks": [{"id": r.id, "title": r.title, "actions": r.actions[:5]} for r in self.runbooks],
-            "similar_past_incidents": [
-                {"id": h.id, "root_cause": h.rca.root_cause, "component": h.rca.suspected_component,
-                 "confirmed": (h.feedback or {}).get("correct")}
-                for h in self.history if h.rca
-            ],
+            "evidence": [{"id": k, "service": v["service"], "status": v["status"],
+                          "description": v["evidence"].description} for k, v in cat.items()],
+            "runbook_actions": {r.id: r.actions[:5] for r in self.runbooks},
         }
 
 

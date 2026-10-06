@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from .models import Action, Evidence, RCAResult, RuledOut, Signal, confidence_label, fmt
 from .orchestrator import RCAContext
 
@@ -23,9 +25,40 @@ TYPE_ACTIONS: dict[str, list[str]] = {
 }
 
 
-def _sig_strength(sigs: list[Signal]) -> float:
-    z = max((abs(s.zscore or 0) for s in sigs), default=0)
-    return len(sigs) * 2 + sum(1 for s in sigs if s.kind in ("errors", "latency")) + min(z, 50) / 10
+@dataclass
+class RankedCandidate:
+    service: str
+    score: float
+    parts: dict[str, float] = field(default_factory=dict)
+
+
+def rank_candidates(ctx: RCAContext) -> list[RankedCandidate]:
+    """對每個異常服務計算 candidate_score，回傳由高到低排序。
+
+    candidate_score = downstream_health + propagation_consistency + signal_strength + change_correlation
+      - downstream_health：它的依賴全部正常 +3；有依賴也異常（較可能只是症狀）-3
+      - propagation_consistency：其他異常服務中，有多少比例「依賴它」（能被它解釋）× 3
+      - signal_strength：異常訊號數、是否持續超標、z-score 大小
+      - change_correlation：此服務最近有部署/變更
+    """
+    topo = ctx.topo
+    abn = set(ctx.abnormal)
+    out: list[RankedCandidate] = []
+    for svc, sigs in ctx.abnormal.items():
+        p: dict[str, float] = {}
+        deps_abn = topo.all_dependencies(svc) & abn
+        p["downstream_health"] = 3.0 if not deps_abn else -3.0
+        others = abn - {svc}
+        explained = {o for o in others if svc in topo.all_dependencies(o)}
+        p["propagation"] = 3.0 * len(explained) / len(others) if others else 0.0
+        maxz = max((abs(s.zscore or 0) for s in sigs), default=0)
+        p["signal_strength"] = (min(len(sigs), 3) * 0.7 + (0.6 if any(s.threshold_breached for s in sigs) else 0)
+                                + min(maxz, 30) / 30)
+        if any(c.service == svc for c in ctx.changes):
+            p["change"] = 2.0 if not deps_abn else 0.5
+        out.append(RankedCandidate(svc, round(sum(p.values()), 2), {k: round(v, 2) for k, v in p.items()}))
+    out.sort(key=lambda c: (-c.score, c.service))
+    return out
 
 
 def rule_rca(ctx: RCAContext) -> RCAResult:
@@ -40,24 +73,28 @@ def rule_rca(ctx: RCAContext) -> RCAResult:
                          confidence=0.2, confidence_label="unknown", reasoning_source="rule",
                          owner=topo.owner(ctx.affected))
 
-    # 1) 最深的異常節點
-    roots = [s for s in abnormal if not (topo.all_dependencies(s) & set(abnormal))]
-    roots.sort(key=lambda s: -_sig_strength(abnormal[s]))
-    root = roots[0]
-    alternatives = roots[1:]
+    # 1) 候選排序（不強制單一 root）
+    ranked = rank_candidates(ctx)
+    top = ranked[0]
+    second = ranked[1] if len(ranked) > 1 else None
+    root = top.service
+    alternatives = [c.service for c in ranked[1:4] if c.score > 0]
     root_type = (topo.get(root) or {}).get("type", "application")
     root_name = (topo.get(root) or {}).get("name", root)
     kinds = sorted({KIND_ZH.get(s.kind, s.kind) for s in abnormal[root]})
 
-    conf = 0.5
-    conf += 0.15 if len(roots) == 1 else -0.1
+    # 信心度主要來自「第一名領先第二名多少」
+    if second is None or second.score <= 0:
+        margin = 1.0
+    else:
+        margin = max(0.0, min(1.0, (top.score - second.score) / max(abs(top.score), 1.0)))
+    ambiguous = second is not None and second.score > 0 and margin < 0.25
+    conf = 0.45 + 0.35 * margin
     if len(abnormal[root]) >= 2:
-        conf += 0.1
+        conf += 0.05
 
     # 2) 傳遞鏈：上游受影響服務
     chain = [s for s in abnormal if s != root and root in topo.all_dependencies(s)]
-    if root != ctx.affected and root in topo.all_dependencies(ctx.affected):
-        conf += 0.1
 
     # 3) 證據：root 訊號 → 中間節點「資源正常」反證 → log → 上游症狀
     for s in abnormal[root]:
@@ -86,7 +123,7 @@ def rule_rca(ctx: RCAContext) -> RCAResult:
     # 4) Root cause 敘述
     changes_on_root = [c for c in ctx.changes if c.service == root]
     if changes_on_root:
-        conf += 0.15 if root == ctx.affected else 0.05
+        conf += 0.05
         c = changes_on_root[0]
         evidence.append(Evidence(type="change", source="changes",
                                  description=f"{c.service} {c.type} @ {c.timestamp.isoformat(timespec='minutes')}：{c.description}"))
@@ -105,6 +142,16 @@ def rule_rca(ctx: RCAContext) -> RCAResult:
             levels.setdefault(len(topo.all_dependencies(svc)), []).append(svc)
         via = " → ".join("、".join(sorted(v)) for _, v in sorted(levels.items()))
         cause = f"{root_name}（{root_type}）{'/'.join(kinds)}異常，沿依賴鏈影響上游服務" + (f"：{via}" if via else "")
+
+    if ambiguous:
+        close = [c.service for c in ranked if c.score > 0 and top.score - c.score <= 0.25 * max(abs(top.score), 1.0)]
+        independent = all(not (topo.all_dependencies(a) & {b}) and not (topo.all_dependencies(b) & {a})
+                          for a in close for b in close if a != b)
+        cause = (f"多個候選分數接近（{'、'.join(close)}）"
+                 + ("，彼此沒有依賴關係：可能是兩個獨立故障，或共同的網路/基礎設施問題。" if independent else "。")
+                 + f"目前最可疑：{cause}")
+    evidence.append(Evidence(type="topology", source="rca-ranking",
+                             description="候選排名：" + "，".join(f"{c.service}={c.score}" for c in ranked[:4])))
 
     # 依賴中有沒監控到的服務 → 不能完全排除
     blind = [s for s in ctx.unmonitored if s in topo.all_dependencies(root) or s == root]
@@ -125,6 +172,8 @@ def rule_rca(ctx: RCAContext) -> RCAResult:
     for rb in rbs[:2]:
         if root in rb.services or not rb.services:
             actions.extend(rb.actions[:3])
+            if root in rb.services:
+                conf += 0.05
             evidence.append(Evidence(type="runbook", source="runbook", description=f"符合 runbook：{rb.id}（{rb.title}）"))
     if not any(root in rb.services for rb in rbs):  # 沒有專屬 runbook → 用類型預設處置
         actions.extend(TYPE_ACTIONS.get(root_type, []))
@@ -137,10 +186,10 @@ def rule_rca(ctx: RCAContext) -> RCAResult:
     seen: set[str] = set()
     uniq = [a for a in actions if not (a in seen or seen.add(a))]
 
-    conf = max(0.05, min(conf, 0.95))
+    conf = round(max(0.05, min(conf, 0.95)), 2)
     label = confidence_label(conf)
     if label == "unknown":
-        cause = f"unknown（證據不足）— 最可疑：{root}。" + cause
+        cause = "unknown（證據不足）— " + (cause if ambiguous else f"最可疑：{cause}")
 
     return RCAResult(
         incident_id=inc.id, status=inc.severity, affected_service=ctx.affected, suspected_component=root,

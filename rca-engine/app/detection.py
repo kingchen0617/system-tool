@@ -27,9 +27,16 @@ OPS = {
     "<=": lambda a, b: a <= b,
 }
 
+# 評分原則：每一項代表「一個獨立的證據」，不因訊號種類本身加分（避免重複計分）
 DEFAULT_SCORING = {
-    "threshold_breach": 2, "zscore_anomaly": 2, "error_signal": 2, "latency_signal": 2,
-    "dependency_abnormal": 2, "recent_change": 1, "momentary_only": -2, "maintenance": -5,
+    "threshold_breach": 2,      # 固定門檻持續超標
+    "zscore_anomaly": 1,        # 動態基準異常（與門檻高度相關，只加 1）
+    "severe_breach": 2,         # critical 規則超標達門檻 2 倍以上
+    "multi_signal_family": 2,   # 兩種以上不同類型的訊號（latency/errors/saturation/...）同時異常
+    "dependency_abnormal": 2,   # 有依賴關係的多個服務同時異常
+    "recent_change": 1,
+    "momentary_only": -2,
+    "maintenance": -5,
     "incident": 5, "warning": 3,
 }
 
@@ -53,11 +60,19 @@ class RuleSet:
 
 
 # ---------------------------------------------------------------- 1. 單一規則
+def robust_baseline(values: list[float]) -> tuple[float, float]:
+    """回傳 (median, 1.4826 * MAD)。常態分佈下 1.4826*MAD ≈ 標準差。"""
+    med = statistics.median(values)
+    mad = statistics.median([abs(v - med) for v in values]) if len(values) > 1 else 0.0
+    return med, 1.4826 * mad
+
+
 def evaluate_series(rule: dict[str, Any], series: Series, now: float, defaults: dict[str, Any]) -> Signal:
     thr = rule.get("threshold") or {}
     anom = rule.get("anomaly") or {}
     for_s = int(thr.get("for", rule.get("for", defaults["for"])))
     zlimit = float(anom.get("zscore", defaults["zscore"]))
+    guard = int(anom.get("guard", defaults.get("guard", 600)))
     direction = anom.get("direction", "up")
 
     base = dict(rule_id=rule["id"], service=rule["service"], kind=rule.get("kind", "errors"),
@@ -69,7 +84,8 @@ def evaluate_series(rule: dict[str, Any], series: Series, now: float, defaults: 
 
     cutoff = now - for_s
     recent = [v for ts, v in series if ts > cutoff] or [series[-1][1]]
-    history = [v for ts, v in series if ts <= cutoff]
+    # baseline 與 recent 中間留一段 guard band：事故若已持續一段時間，前段不會污染 baseline
+    history = [v for ts, v in series if ts <= cutoff - guard]
     current = statistics.fmean(recent)
 
     # 固定門檻：整段 for 期間「每個點」都超標才算持續超標
@@ -80,13 +96,12 @@ def evaluate_series(rule: dict[str, Any], series: Series, now: float, defaults: 
         breached = all(hits) and len(hits) > 0
         momentary = (not breached) and hits[-1]
 
-    # 動態基準 z-score
+    # 動態基準：穩健 z-score（median + MAD），對歷史中的尖峰/長尾不敏感
     mean = std = z = None
     anomalous = False
     if history:
-        mean = statistics.fmean(history)
-        std = statistics.pstdev(history) if len(history) > 1 else 0.0
-        floor = max(abs(mean) * 0.05, 1e-6)  # 避免 std≈0 時 z 爆大
+        mean, std = robust_baseline(history)
+        floor = max(abs(mean) * 0.05, 1e-6)  # 避免 MAD≈0（平坦序列）時 z 爆大
         z = (current - mean) / max(std, floor)
         if anom.get("enabled", False) and len(history) >= 10:
             if direction == "up":
@@ -112,11 +127,12 @@ def evaluate_rules(ruleset: RuleSet, source: DataSource, now: float | None = Non
     for rule in ruleset.rules:
         d = ruleset.defaults
         window = int((rule.get("anomaly") or {}).get("window", d["window"]))
+        guard = int((rule.get("anomaly") or {}).get("guard", d.get("guard", 600)))
         for_s = int((rule.get("threshold") or {}).get("for", d["for"]))
         step = int(rule.get("step", d["step"]))
         try:
             series = source.query_range(rule.get("source", "prometheus"), rule["query"],
-                                        now - window - for_s, now, step)
+                                        now - window - guard - for_s, now, step)
         except Exception as e:  # 單一規則失敗不影響其他規則
             series = []
             print(f"[detection] rule {rule['id']} query failed: {e}")
@@ -145,6 +161,15 @@ def pick_affected(services: set[str], signals: list[Signal], topo: Topology) -> 
     return sorted(tops, key=lambda s: (-topo.criticality(s), -weight.get(s, 0), s))[0]
 
 
+def is_severe(s: Signal) -> bool:
+    """critical 規則、持續超標，且超過門檻 2 倍（> 類）或低於門檻一半（< 類）"""
+    if s.severity != "critical" or not s.threshold_breached or s.threshold is None:
+        return False
+    if s.operator in (">", ">="):
+        return s.current >= 2 * s.threshold if s.threshold > 0 else True
+    return s.current <= s.threshold / 2
+
+
 def score_group(services: set[str], signals: list[Signal], changes: list[ChangeEvent],
                 maintenance: set[str], scoring: dict[str, int]) -> tuple[int, dict[str, int]]:
     b: dict[str, int] = {}
@@ -152,10 +177,10 @@ def score_group(services: set[str], signals: list[Signal], changes: list[ChangeE
         b["threshold_breach"] = scoring["threshold_breach"]
     if any(s.anomalous for s in signals):
         b["zscore_anomaly"] = scoring["zscore_anomaly"]
-    if any(s.kind == "errors" for s in signals):
-        b["error_signal"] = scoring["error_signal"]
-    if any(s.kind == "latency" for s in signals):
-        b["latency_signal"] = scoring["latency_signal"]
+    if any(is_severe(s) for s in signals):
+        b["severe_breach"] = scoring["severe_breach"]
+    if len({s.kind for s in signals if s.abnormal}) >= 2:
+        b["multi_signal_family"] = scoring["multi_signal_family"]
     if len(services) > 1:
         b["dependency_abnormal"] = scoring["dependency_abnormal"]
     if changes:

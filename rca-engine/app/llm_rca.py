@@ -1,9 +1,12 @@
 """LLM RCA：用本地 Ollama（預設 qwen3:4b）根據「已收集的證據」推理 root cause。
 
-安全設計：
+安全設計（LLM 只推理，不創造事實）：
   - LLM 只能看到 orchestrator 收集到的證據，不能自己執行任何指令
-  - 輸出必須是合法 JSON 且通過 Pydantic 驗證；失敗重試 1 次，仍失敗 → 回傳 None（由規則式 RCA 接手）
-  - suspected_component 必須是拓撲中存在的服務；若 LLM 指認「沒有任何異常訊號」的服務，信心度強制降到 0.5 以下
+  - 每筆證據都有 ID；LLM 只能回傳 evidence_ids，證據內容由 Python 從 context 重新組裝
+    → 引用不存在的 ID = 驗證失敗
+  - ruled_out 只能列「監控指標全部正常」的服務；把異常服務列為排除 = 驗證失敗
+  - suspected_component 必須是拓撲中存在的服務；若它沒有任何異常證據、或引用的證據都與它無關 → 信心度壓到 0.5 以下
+  - 驗證失敗重試 1 次，仍失敗 → 回傳 None（由規則式 RCA 接手）
 """
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from typing import Any, Optional
 
 from pydantic import ValidationError
 
-from .models import Action, Evidence, RCAResult, RuledOut, confidence_label
+from .models import Action, RCAResult, RuledOut, confidence_label, fmt
 from .orchestrator import RCAContext
 
 SYSTEM_PROMPT = """You are an SRE root-cause-analysis assistant.
@@ -26,15 +29,16 @@ Rules:
   chain usually propagates UP to callers; prefer the deepest abnormal service whose own dependencies are normal.
 - A service with normal saturation metrics but timeouts towards a dependency is usually a symptom, not the cause.
 - If evidence is insufficient, set suspected_component to "unknown" and confidence below 0.6.
-- Distinguish observed facts (evidence) from hypotheses (root_cause) and list ruled-out components.
+- Every fact is in "evidence" with an "id". Cite facts ONLY by their id in "evidence_ids". Never write new facts.
+- "ruled_out" may only contain services listed in "normal_services".
 - "baseline_hypothesis" is the result of a rule engine. Agree with it unless the evidence clearly contradicts it.
 - Write root_cause and actions in Traditional Chinese (繁體中文).
 - Return ONLY valid JSON with this shape:
 {"suspected_component": "<service id or unknown>",
- "root_cause": "<one or two sentences>",
+ "root_cause": "<one or two sentences: your hypothesis>",
  "confidence": <0..1>,
- "evidence": [{"type": "metric|log|change|topology|runbook|history", "source": "...", "description": "..."}],
- "ruled_out": [{"component": "...", "reason": "..."}],
+ "evidence_ids": ["<id>", "..."],
+ "ruled_out": ["<service id>", "..."],
  "recommended_actions": ["...", "..."]}
 """
 
@@ -105,34 +109,53 @@ class OllamaRCA:
 
     def _to_result(self, d: dict[str, Any], ctx: RCAContext, baseline: RCAResult) -> RCAResult:
         topo = ctx.topo
+        cat = ctx.evidence_catalog()
+
         comp = str(d.get("suspected_component", "unknown")).strip()
         if comp != "unknown" and topo.get(comp) is None:
             raise ValueError(f"suspected_component '{comp}' 不在拓撲中")
+
+        ids = [str(i) for i in d.get("evidence_ids", [])]
+        bad = [i for i in ids if i not in cat]
+        if bad:
+            raise ValueError(f"evidence_ids 引用了不存在的證據：{bad}（只能使用 evidence 清單中的 id）")
+        if comp != "unknown" and not ids:
+            raise ValueError("evidence_ids 不可為空")
+
+        ruled: list[RuledOut] = []
+        for c in d.get("ruled_out", []):
+            c = c.get("component", "") if isinstance(c, dict) else str(c)
+            if c in ctx.abnormal:
+                raise ValueError(f"'{c}' 有異常訊號，不能列為 ruled_out")
+            if c in ctx.normal:
+                ruled.append(RuledOut(component=c, reason="所有監控指標正常：" + ", ".join(
+                    f"{s.rule_id}={fmt(s.current)}" for s in ctx.normal[c])))
+
         conf = float(d.get("confidence", 0))
         if conf > 1:
             conf = conf / 100.0
-        # 防幻覺：指認的元件完全沒有異常證據 → 降信心
-        if comp != "unknown" and comp not in ctx.abnormal:
+        # 防幻覺：指認的元件沒有異常訊號，或引用的證據沒有一筆跟它（或它的上游症狀）有關 → 降信心
+        related = {comp} | topo.all_dependents(comp) if comp != "unknown" else set()
+        if comp != "unknown" and (comp not in ctx.abnormal or not any(
+                cat[i]["service"] in related and cat[i]["status"] == "abnormal" for i in ids)):
             conf = min(conf, 0.5)
         if comp == "unknown":
             conf = min(conf, 0.55)
-        evidence = [Evidence(**e) if isinstance(e, dict) else Evidence(description=str(e))
-                    for e in d.get("evidence", [])]
-        if not evidence:
-            evidence = baseline.evidence
-        ruled_out = [RuledOut(**r) for r in d.get("ruled_out", []) if isinstance(r, dict)]
+        conf = round(max(0.0, min(conf, 0.99)), 2)
+
+        evidence = [cat[i]["evidence"] for i in dict.fromkeys(ids)]
         acts = d.get("recommended_actions", [])
         actions = [Action(priority=i + 1, action=a if isinstance(a, str) else a.get("action", str(a)))
                    for i, a in enumerate(acts)] or baseline.recommended_actions
-        root_cause = str(d.get("root_cause", "")).strip() or "unknown"
+        root_cause = str(d.get("root_cause", "")).strip()
         if not root_cause:
             raise ValueError("root_cause 為空")
         return RCAResult(
             incident_id=ctx.incident.id, status=ctx.incident.severity, affected_service=ctx.affected,
             suspected_component=comp, root_cause=root_cause, confidence=max(0.0, min(conf, 0.99)),
             confidence_label=confidence_label(conf), reasoning_source="llm", model=self.model,
-            evidence=evidence, ruled_out=ruled_out or baseline.ruled_out,
-            alternatives=[a for a in [baseline.suspected_component] if a != comp],
+            evidence=evidence, ruled_out=ruled or baseline.ruled_out,
+            alternatives=[a for a in [baseline.suspected_component, *baseline.alternatives] if a != comp][:3],
             recommended_actions=actions[:6],
             owner=topo.owner(comp) if comp != "unknown" else topo.owner(ctx.affected),
         )

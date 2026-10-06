@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     _stop.set()
 
 
-app = FastAPI(title="system-tool · AI SRE RCA Engine", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="system-tool · AI SRE RCA Engine", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")

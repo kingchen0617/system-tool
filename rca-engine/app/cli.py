@@ -58,8 +58,11 @@ def cmd_evaluate(args) -> int:
         total += 1
         got = incs[0].rca if incs and incs[0].rca else None
         cands = [got.suspected_component, *got.alternatives] if got else []
-        h1 = bool(cands) and cands[0] == exp
-        h3 = exp in cands[:3]
+        ok_set = set(sc.get("acceptable_root_causes") or [exp])
+        h1 = bool(cands) and cands[0] in ok_set
+        h3 = bool(ok_set & set(cands[:3]))
+        if got and sc.get("max_confidence") is not None and got.confidence > float(sc["max_confidence"]):
+            h1 = h3 = False  # 模稜兩可的情境卻給出過高信心度 → 視為錯誤
         top1 += h1
         top3 += h3
         rows.append((name, exp, f"{cands[0]} ({int(got.confidence * 100)}%, {got.reasoning_source})" if got else "-",
