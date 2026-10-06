@@ -4,13 +4,19 @@
 # kind：latency | errors | saturation | traffic   （影響評分與 RCA 推理）
 # source：prometheus（預設）| loki
 # threshold：固定門檻。for = 必須持續超標的秒數（避免瞬間尖峰誤報）
-# anomaly：動態基準。用過去 window 秒當 baseline，計算 z = (近期平均 - 基準平均) / 基準標準差
+# anomaly：動態基準（穩健 z-score）。baseline = [now-for-guard-window, now-for-guard]，
+#          z = (近期平均 - baseline 中位數) / (1.4826 × MAD)。guard 是緩衝區，避免事故前段污染 baseline
+#
+# ⚠ label 注意：node_cpu_seconds_total{service=...} 需要在 prometheus.yml 的 scrape target 加上
+#   labels: { service: <topology id> }（見 observability/prometheus/prometheus.yml），否則會一直 no_data。
+#   可用 GET /services 或 `python -m app.cli detect` 檢查哪些規則是 NO DATA。
 # direction：up（數值變大才算異常，預設）| down | both
 
 defaults:
   step: 60          # 取樣間隔（秒）
   for: 300          # 預設持續時間
   window: 3600      # 預設 baseline 視窗
+  guard: 600        # baseline 與近期資料之間的緩衝（秒）
   zscore: 3.0
 
 rules:
@@ -70,7 +76,8 @@ rules:
     service: redis
     kind: latency
     severity: critical
-    query: 'avg(rate(redis_commands_duration_seconds_total[5m]) / clamp_min(rate(redis_commands_processed_total[5m]), 1))'
+    # redis_exporter：先各自 sum 再相除，避免 cmd label 對不上；單位 = 每個指令平均秒數
+    query: 'sum(rate(redis_commands_duration_seconds_total[5m])) / clamp_min(sum(rate(redis_commands_total[5m])), 1)'
     threshold: { operator: ">", value: 0.01 }
     anomaly: { enabled: true }
 
@@ -78,16 +85,19 @@ rules:
     service: redis
     kind: saturation
     severity: warning
-    query: 'max(redis_memory_used_bytes / clamp_min(redis_memory_max_bytes, 1)) * 100'
+    # 沒設定 maxmemory（=0）時回傳空值（no_data），避免算出不合理的百分比
+    query: 'max(redis_memory_used_bytes / (redis_memory_max_bytes > 0)) * 100'
     threshold: { operator: ">", value: 90 }
     anomaly: { enabled: false }
 
   # ---------- mariadb ----------
-  - id: db-query-latency
+  # 注意：這是「每秒新增的慢查詢數」，不是查詢延遲本身。
+  # 真正的 DB latency 需要應用端 trace / query duration histogram（v0.3 加入 Tempo 後補上）。
+  - id: db-slow-query-rate
     service: mariadb
     kind: latency
     severity: critical
-    query: 'avg(rate(mysql_global_status_slow_queries[5m]))'
+    query: 'sum(rate(mysql_global_status_slow_queries[5m]))'
     threshold: { operator: ">", value: 1 }
     anomaly: { enabled: true }
 
@@ -135,11 +145,12 @@ rules:
     anomaly: { enabled: true }
 
 # 降低誤報：評分機制（分數 >= incident 才建立事件並通知）
+# 每一項代表一個「獨立證據」；訊號種類本身不加分，避免重複計分
 scoring:
   threshold_breach: 2      # 固定門檻持續超標
-  zscore_anomaly: 2        # 動態基準異常
-  error_signal: 2          # 錯誤率上升
-  latency_signal: 2        # 延遲上升
+  zscore_anomaly: 1        # 動態基準異常（與門檻高度相關，只加 1）
+  severe_breach: 2         # critical 規則超標達門檻 2 倍以上
+  multi_signal_family: 2   # 兩種以上不同類型訊號（latency/errors/saturation）同時異常
   dependency_abnormal: 2   # 有依賴關係的多個服務同時異常
   recent_change: 1         # 最近 30 分鐘內有部署/設定變更
   momentary_only: -2       # 只是瞬間尖峰
