@@ -1,0 +1,47 @@
+{
+  "name": "Redis 與 MariaDB 同時異常（兩個候選，應降低信心度）",
+  "expected_root_cause": "redis/mariadb",
+  "acceptable_root_causes": [
+    "redis",
+    "mariadb"
+  ],
+  "max_confidence": 0.84,
+  "metrics": {
+    "redis-latency": {
+      "baseline": 0.0005,
+      "noise": 0.0001,
+      "recent": [
+        0.03,
+        0.04,
+        0.05,
+        0.05,
+        0.05,
+        0.05
+      ]
+    },
+    "db-slow-query-rate": {
+      "baseline": 0.2,
+      "noise": 0.05,
+      "recent": [
+        4,
+        5,
+        6,
+        6,
+        6,
+        6
+      ]
+    },
+    "api-p95-latency": {
+      "baseline": 0.8,
+      "noise": 0.1,
+      "recent": [
+        4,
+        5,
+        6,
+        6,
+        6.5,
+        6
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "只有 API 5xx 暴增到 40%（單一訊號但嚴重，仍應通知）",
+  "expected_root_cause": "payment-api",
+  "metrics": {
+    "api-5xx-rate": {
+      "baseline": 0.005,
+      "noise": 0.002,
+      "recent": [
+        0.3,
+        0.38,
+        0.4,
+        0.42,
+        0.4,
+        0.41
+      ]
+    }
+  },
+  "logs": {
+    "payment-api": [
+      "[ERROR] PHP Fatal error: Allowed memory size of 134217728 bytes exhausted"
+    ]
+  }
+}

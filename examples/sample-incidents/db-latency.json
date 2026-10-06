@@ -2,7 +2,7 @@
   "name": "MariaDB 慢查詢暴增",
   "expected_root_cause": "mariadb",
   "metrics": {
-    "db-query-latency": {
+    "db-slow-query-rate": {
       "baseline": 0.2,
       "noise": 0.05,
       "recent": [
