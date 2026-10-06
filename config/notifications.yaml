@@ -1,0 +1,30 @@
+# 告警路由：依 owner + 嚴重度 決定通知管道
+# 管道的帳號/金鑰放在 .env（SLACK_WEBHOOK_URL / LINE_CHANNEL_ACCESS_TOKEN / SMTP_*）
+# console 管道只會印在 rca-engine log，開發測試用
+cooldown_seconds: 1800   # 同一事件在此時間內不重複通知
+
+routes:
+  - owner: payment-team
+    severity: [critical]
+    channels: [slack, line, email, console]
+
+  - owner: dba-team
+    severity: [critical, warning]
+    channels: [slack, email, console]
+
+  - owner: infra-team
+    severity: [critical, warning]
+    channels: [slack, console]
+
+default:
+  channels: [console]
+
+# 各 owner 的 Email 收件人 / LINE 推播對象（userId 或 groupId）
+contacts:
+  payment-team:
+    email: [payment-oncall@example.com]
+    line_to: []
+  dba-team:
+    email: [dba@example.com]
+  infra-team:
+    email: [infra@example.com]

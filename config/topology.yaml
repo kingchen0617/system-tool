@@ -1,0 +1,69 @@
+# Service Graph（服務拓撲）
+# depends_on：此服務「呼叫／依賴」的下游服務。RCA 會沿著依賴往下找「最深的異常節點」。
+# criticality：P1 最重要 ~ P3
+# log_selector：Loki 查詢此服務 log 用的 stream selector
+version: 1
+
+services:
+  - id: nginx
+    name: Nginx Gateway
+    type: gateway
+    owner: infra-team
+    criticality: P1
+    log_selector: '{service="nginx"}'
+    depends_on:
+      - payment-api
+
+  - id: payment-api
+    name: Payment API (Laravel)
+    type: application
+    owner: payment-team
+    criticality: P1
+    log_selector: '{service="payment-api"}'
+    depends_on:
+      - redis
+      - mariadb
+      - proxy
+
+  - id: payment-job
+    name: Payment Worker
+    type: worker
+    owner: payment-team
+    criticality: P1
+    log_selector: '{service="payment-job"}'
+    depends_on:
+      - redis
+      - mariadb
+      - proxy
+
+  - id: redis
+    name: Redis
+    type: cache
+    owner: infra-team
+    criticality: P1
+    log_selector: '{service="redis"}'
+    depends_on: []
+
+  - id: mariadb
+    name: MariaDB
+    type: database
+    owner: dba-team
+    criticality: P1
+    log_selector: '{service="mariadb"}'
+    depends_on: []
+
+  - id: proxy
+    name: Outbound Proxy (Squid)
+    type: network
+    owner: infra-team
+    criticality: P1
+    log_selector: '{service="proxy"}'
+    depends_on:
+      - provider-api
+
+  - id: provider-api
+    name: External Payment Provider
+    type: external
+    owner: payment-team
+    criticality: P1
+    depends_on: []

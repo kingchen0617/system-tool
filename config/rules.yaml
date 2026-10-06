@@ -1,0 +1,148 @@
+# 異常偵測規則
+# 每條規則 = 一個 PromQL（或 Loki metric query），必須回傳「單一時間序列」（請先 sum/avg 聚合）。
+#
+# kind：latency | errors | saturation | traffic   （影響評分與 RCA 推理）
+# source：prometheus（預設）| loki
+# threshold：固定門檻。for = 必須持續超標的秒數（避免瞬間尖峰誤報）
+# anomaly：動態基準。用過去 window 秒當 baseline，計算 z = (近期平均 - 基準平均) / 基準標準差
+# direction：up（數值變大才算異常，預設）| down | both
+
+defaults:
+  step: 60          # 取樣間隔（秒）
+  for: 300          # 預設持續時間
+  window: 3600      # 預設 baseline 視窗
+  zscore: 3.0
+
+rules:
+  # ---------- nginx ----------
+  - id: nginx-5xx-rate
+    service: nginx
+    kind: errors
+    severity: critical
+    query: 'sum(rate(nginx_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(nginx_http_requests_total[5m])), 1)'
+    threshold: { operator: ">", value: 0.05 }
+    anomaly: { enabled: true }
+
+  # ---------- payment-api ----------
+  - id: api-p95-latency
+    service: payment-api
+    kind: latency
+    severity: critical
+    query: 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="payment-api"}[5m])) by (le))'
+    threshold: { operator: ">", value: 3 }
+    anomaly: { enabled: true }
+
+  - id: api-5xx-rate
+    service: payment-api
+    kind: errors
+    severity: critical
+    query: 'sum(rate(http_requests_total{service="payment-api",status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total{service="payment-api"}[5m])), 1)'
+    threshold: { operator: ">", value: 0.05 }
+    anomaly: { enabled: true }
+
+  - id: api-cpu
+    service: payment-api
+    kind: saturation
+    severity: warning
+    query: '100 - avg(rate(node_cpu_seconds_total{mode="idle",service="payment-api"}[5m])) * 100'
+    threshold: { operator: ">", value: 90 }
+    anomaly: { enabled: false }
+
+  # ---------- payment-job ----------
+  - id: job-queue-depth
+    service: payment-job
+    kind: saturation
+    severity: warning
+    query: 'sum(laravel_queue_size{queue="payment"})'
+    threshold: { operator: ">", value: 1000 }
+    anomaly: { enabled: true }
+
+  - id: job-failure-rate
+    service: payment-job
+    kind: errors
+    severity: critical
+    query: 'sum(rate(laravel_job_failed_total{queue="payment"}[5m])) / clamp_min(sum(rate(laravel_job_processed_total{queue="payment"}[5m])), 0.001)'
+    threshold: { operator: ">", value: 0.05 }
+    anomaly: { enabled: true }
+
+  # ---------- redis ----------
+  - id: redis-latency
+    service: redis
+    kind: latency
+    severity: critical
+    query: 'avg(rate(redis_commands_duration_seconds_total[5m]) / clamp_min(rate(redis_commands_processed_total[5m]), 1))'
+    threshold: { operator: ">", value: 0.01 }
+    anomaly: { enabled: true }
+
+  - id: redis-memory
+    service: redis
+    kind: saturation
+    severity: warning
+    query: 'max(redis_memory_used_bytes / clamp_min(redis_memory_max_bytes, 1)) * 100'
+    threshold: { operator: ">", value: 90 }
+    anomaly: { enabled: false }
+
+  # ---------- mariadb ----------
+  - id: db-query-latency
+    service: mariadb
+    kind: latency
+    severity: critical
+    query: 'avg(rate(mysql_global_status_slow_queries[5m]))'
+    threshold: { operator: ">", value: 1 }
+    anomaly: { enabled: true }
+
+  - id: db-connections
+    service: mariadb
+    kind: saturation
+    severity: warning
+    query: 'max(mysql_global_status_threads_connected / clamp_min(mysql_global_variables_max_connections, 1)) * 100'
+    threshold: { operator: ">", value: 85 }
+    anomaly: { enabled: true }
+
+  # ---------- proxy ----------
+  - id: proxy-connect-timeouts
+    service: proxy
+    kind: errors
+    severity: critical
+    source: loki
+    query: 'sum(count_over_time({service="proxy"} |~ "(?i)timeout|aborted" [1m]))'
+    threshold: { operator: ">", value: 20 }
+    anomaly: { enabled: true }
+
+  - id: proxy-cpu
+    service: proxy
+    kind: saturation
+    severity: warning
+    query: '100 - avg(rate(node_cpu_seconds_total{mode="idle",service="proxy"}[5m])) * 100'
+    threshold: { operator: ">", value: 85 }
+    anomaly: { enabled: true }
+
+  # ---------- provider-api（外部服務：從 app 端量測 upstream） ----------
+  - id: provider-latency
+    service: provider-api
+    kind: latency
+    severity: critical
+    query: 'histogram_quantile(0.95, sum(rate(upstream_request_duration_seconds_bucket{upstream="provider"}[5m])) by (le))'
+    threshold: { operator: ">", value: 5 }
+    anomaly: { enabled: true }
+
+  - id: provider-error-rate
+    service: provider-api
+    kind: errors
+    severity: critical
+    query: 'sum(rate(upstream_requests_total{upstream="provider",result!="ok"}[5m])) / clamp_min(sum(rate(upstream_requests_total{upstream="provider"}[5m])), 0.001)'
+    threshold: { operator: ">", value: 0.1 }
+    anomaly: { enabled: true }
+
+# 降低誤報：評分機制（分數 >= incident 才建立事件並通知）
+scoring:
+  threshold_breach: 2      # 固定門檻持續超標
+  zscore_anomaly: 2        # 動態基準異常
+  error_signal: 2          # 錯誤率上升
+  latency_signal: 2        # 延遲上升
+  dependency_abnormal: 2   # 有依賴關係的多個服務同時異常
+  recent_change: 1         # 最近 30 分鐘內有部署/設定變更
+  momentary_only: -2       # 只是瞬間尖峰
+  maintenance: -5          # 維護中
+  incident: 5              # >= 5 → Incident（通知）
+  warning: 3               # 3~4 → Warning（觀察，不通知）
