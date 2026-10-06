@@ -1,0 +1,17 @@
+{
+  "name": "CPU 瞬間尖峰（應被抑制，不通知）",
+  "expected_root_cause": "none",
+  "metrics": {
+    "api-cpu": {
+      "baseline": 30,
+      "noise": 3,
+      "recent": [
+        31,
+        29,
+        30,
+        32,
+        97
+      ]
+    }
+  }
+}

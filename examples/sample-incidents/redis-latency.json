@@ -1,0 +1,47 @@
+{
+  "name": "Redis 延遲升高（大 key / 阻塞指令）",
+  "expected_root_cause": "redis",
+  "metrics": {
+    "redis-latency": {
+      "baseline": 0.0005,
+      "noise": 0.0001,
+      "recent": [
+        0.02,
+        0.04,
+        0.05,
+        0.05,
+        0.06,
+        0.05
+      ]
+    },
+    "api-p95-latency": {
+      "baseline": 0.8,
+      "noise": 0.1,
+      "recent": [
+        3.2,
+        4,
+        4.5,
+        4.4,
+        4.8,
+        4.6
+      ]
+    },
+    "job-queue-depth": {
+      "baseline": 50,
+      "noise": 10,
+      "recent": [
+        900,
+        1200,
+        1500,
+        1800,
+        2100,
+        2300
+      ]
+    }
+  },
+  "logs": {
+    "payment-api": [
+      "[ERROR] Redis: read error on connection to redis:6379 (timeout)"
+    ]
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "外部金流服務商逾時（proxy 本身正常）",
+  "expected_root_cause": "provider-api",
+  "metrics": {
+    "provider-latency": {
+      "baseline": 0.8,
+      "noise": 0.1,
+      "recent": [
+        12,
+        30,
+        38,
+        41,
+        44,
+        42
+      ]
+    },
+    "provider-error-rate": {
+      "baseline": 0.01,
+      "noise": 0.005,
+      "recent": [
+        0.25,
+        0.4,
+        0.45,
+        0.5,
+        0.48,
+        0.52
+      ]
+    },
+    "proxy-connect-timeouts": {
+      "baseline": 2,
+      "noise": 1,
+      "recent": [
+        60,
+        110,
+        140,
+        150,
+        160,
+        155
+      ]
+    },
+    "api-p95-latency": {
+      "baseline": 0.8,
+      "noise": 0.1,
+      "recent": [
+        4,
+        9,
+        12,
+        14,
+        15,
+        14
+      ]
+    },
+    "job-failure-rate": {
+      "baseline": 0.01,
+      "noise": 0.004,
+      "recent": [
+        0.2,
+        0.3,
+        0.35,
+        0.4,
+        0.38,
+        0.41
+      ]
+    }
+  },
+  "logs": {
+    "proxy": [
+      "1759740000.123 45012 10.0.1.20 TCP_TUNNEL/503 0 CONNECT api.provider.example:443 - HIER_NONE/- - timeout",
+      "1759740001.551 45003 10.0.1.21 TCP_TUNNEL/503 0 CONNECT api.provider.example:443 - aborted due to timeout"
+    ],
+    "payment-job": [
+      "[ERROR] depositApply failed: cURL error 28: Operation timed out after 45001 milliseconds (provider)"
+    ],
+    "payment-api": [
+      "[ERROR] ProviderClient: cURL error 28: Operation timed out after 45000 milliseconds"
+    ]
+  }
+}

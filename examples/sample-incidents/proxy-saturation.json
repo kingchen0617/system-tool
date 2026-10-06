@@ -1,0 +1,48 @@
+{
+  "name": "Proxy 自身資源耗盡（服務商正常）",
+  "expected_root_cause": "proxy",
+  "metrics": {
+    "proxy-cpu": {
+      "baseline": 25,
+      "noise": 3,
+      "recent": [
+        92,
+        96,
+        98,
+        97,
+        99,
+        98
+      ]
+    },
+    "proxy-connect-timeouts": {
+      "baseline": 2,
+      "noise": 1,
+      "recent": [
+        40,
+        80,
+        95,
+        110,
+        120,
+        115
+      ]
+    },
+    "job-failure-rate": {
+      "baseline": 0.01,
+      "noise": 0.004,
+      "recent": [
+        0.12,
+        0.2,
+        0.25,
+        0.3,
+        0.28,
+        0.3
+      ]
+    }
+  },
+  "logs": {
+    "proxy": [
+      "WARNING! Your cache is running out of filedescriptors",
+      "TCP_TUNNEL/503 CONNECT api.provider.example:443 - aborted due to timeout"
+    ]
+  }
+}

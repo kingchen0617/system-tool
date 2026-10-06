@@ -1,0 +1,62 @@
+{
+  "name": "MariaDB 慢查詢暴增",
+  "expected_root_cause": "mariadb",
+  "metrics": {
+    "db-query-latency": {
+      "baseline": 0.2,
+      "noise": 0.05,
+      "recent": [
+        3,
+        5,
+        6,
+        7,
+        6.5,
+        7.2
+      ]
+    },
+    "api-p95-latency": {
+      "baseline": 0.8,
+      "noise": 0.1,
+      "recent": [
+        3.5,
+        5,
+        6,
+        6.5,
+        7,
+        6.8
+      ]
+    },
+    "api-5xx-rate": {
+      "baseline": 0.005,
+      "noise": 0.002,
+      "recent": [
+        0.06,
+        0.08,
+        0.09,
+        0.1,
+        0.09,
+        0.11
+      ]
+    },
+    "nginx-5xx-rate": {
+      "baseline": 0.005,
+      "noise": 0.002,
+      "recent": [
+        0.06,
+        0.07,
+        0.08,
+        0.09,
+        0.08,
+        0.1
+      ]
+    }
+  },
+  "logs": {
+    "mariadb": [
+      "# Query_time: 12.4  Lock_time: 0.0 Rows_examined: 4812331  SELECT * FROM deposits WHERE status='pending'"
+    ],
+    "payment-api": [
+      "[ERROR] SQLSTATE[HY000]: General error: 2006 MySQL server has gone away"
+    ]
+  }
+}

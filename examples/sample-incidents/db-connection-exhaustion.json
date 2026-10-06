@@ -1,0 +1,50 @@
+{
+  "name": "MariaDB 連線數耗盡",
+  "expected_root_cause": "mariadb",
+  "metrics": {
+    "db-connections": {
+      "baseline": 35,
+      "noise": 4,
+      "recent": [
+        90,
+        95,
+        99,
+        100,
+        100,
+        100
+      ]
+    },
+    "api-5xx-rate": {
+      "baseline": 0.005,
+      "noise": 0.002,
+      "recent": [
+        0.1,
+        0.18,
+        0.25,
+        0.3,
+        0.28,
+        0.3
+      ]
+    },
+    "job-failure-rate": {
+      "baseline": 0.01,
+      "noise": 0.004,
+      "recent": [
+        0.1,
+        0.2,
+        0.3,
+        0.3,
+        0.32,
+        0.31
+      ]
+    }
+  },
+  "logs": {
+    "payment-api": [
+      "[ERROR] SQLSTATE[08004] [1040] Too many connections"
+    ],
+    "mariadb": [
+      "[Warning] Aborted connection 48212 to db: 'payment' (Too many connections)"
+    ]
+  }
+}
