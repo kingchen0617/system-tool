@@ -55,6 +55,7 @@ class Notifier:
         self.contacts = data.get("contacts", {})
         self.cooldown = int(data.get("cooldown_seconds", 1800))
         self.s = settings
+        self.allowed_channels: set[str] | None = None   # None = 不限（由授權決定）
 
     def channels_for(self, owner: str, severity: str) -> list[str]:
         for r in self.routes:
@@ -71,6 +72,9 @@ class Notifier:
         results: dict[str, str] = {}
         for owner in owners:
             for ch in self.channels_for(owner, inc.severity):
+                if self.allowed_channels is not None and ch not in self.allowed_channels:
+                    results[f"{owner}:{ch}"] = "skipped (目前方案不含 notifications 功能)"
+                    continue
                 try:
                     results[f"{owner}:{ch}"] = getattr(self, f"_send_{ch}")(owner, text, inc)
                 except AttributeError:

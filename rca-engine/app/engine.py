@@ -10,6 +10,7 @@ from .config import Settings
 from .datasource import DataSource, LiveSource, StaticSource
 from .detection import RuleSet, correlate, evaluate_rules
 from .knowledge import KnowledgeBase
+from .licensing import LicenseManager, LicenseState
 from .llm_rca import OllamaRCA
 from .models import ChangeEvent, Incident, Signal, utcnow
 from .notifications import Notifier
@@ -20,7 +21,8 @@ from .topology import Topology
 
 
 class Engine:
-    def __init__(self, settings: Settings, persist: bool = True):
+    def __init__(self, settings: Settings, persist: bool = True,
+                 license_manager: Optional[LicenseManager] = None, license_state: Optional[LicenseState] = None):
         self.s = settings
         self.topo = Topology.load(settings.config_dir / "topology.yaml")
         self.rules = RuleSet.load(settings.config_dir / "rules.yaml")
@@ -37,6 +39,48 @@ class Engine:
         self.last_signals: list[Signal] = []
         self.last_run: Optional[datetime] = None
 
+        # ---- 授權 ----
+        self.all_rules = self.rules
+        self.license_manager = license_manager or LicenseManager(
+            settings.data_dir, license_key=settings.license_key,
+            license_file=Path(settings.license_file) if settings.license_file else None,
+            server_url=settings.license_server_url, telemetry_opt_in=settings.telemetry_opt_in, persist=persist)
+        self._fixed_license = license_state   # 測試用：直接指定授權狀態
+        self.license: LicenseState = LicenseState()
+        self.monitored_services: list[str] = []
+        self.unmonitored_by_license: list[str] = []
+        self.apply_license()
+
+    # ------------------------------------------------------------------ 授權
+    def apply_license(self, state: Optional[LicenseState] = None) -> LicenseState:
+        """依目前授權調整：可監控的服務數、AI RCA、通知管道、歷史檢索。"""
+        st = state or self._fixed_license or self.license_manager.evaluate()
+        self.license = st
+        ruled = list(dict.fromkeys(r["service"] for r in self.all_rules.rules))
+        if st.max_services and len(ruled) > st.max_services:
+            order = {sid: i for i, sid in enumerate(self.topo.services)}
+            ranked = sorted(ruled, key=lambda sid: (-self.topo.criticality(sid), order.get(sid, 0)))
+            keep = set(ranked[:st.max_services])
+        else:
+            keep = set(ruled)
+        self.monitored_services = [s for s in ruled if s in keep]
+        self.unmonitored_by_license = [s for s in ruled if s not in keep]
+        self.rules = RuleSet(rules=[r for r in self.all_rules.rules if r["service"] in keep],
+                             defaults=self.all_rules.defaults, scoring=self.all_rules.scoring)
+        self.notifier.allowed_channels = None if self.has_feature("notifications") else {"console"}
+        if self.unmonitored_by_license:
+            print(f"[license] 方案 {st.edition} 最多監控 {st.max_services} 個服務，"
+                  f"未監控：{', '.join(self.unmonitored_by_license)}")
+        return st
+
+    def has_feature(self, feature: str) -> bool:
+        return feature in self.license.features
+
+    def refresh_license(self) -> LicenseState:
+        usage = {"services_configured": len(self.topo.services), "services_monitored": len(self.monitored_services),
+                 "incidents": len(self.store.incidents)}
+        return self.apply_license(self.license_manager.refresh(usage=usage))
+
     @property
     def live(self) -> LiveSource:
         if self._live is None:
@@ -48,10 +92,12 @@ class Engine:
                   simulated: bool = False, notify: bool = True, use_llm: bool = True) -> list[Incident]:
         source = source or self.live
         now = utcnow()
-        signals = evaluate_rules(self.rules, source, now.timestamp())
+        # 模擬情境（展示 / 驗收用）不受服務數上限限制；正式監控依授權
+        rules = self.all_rules if simulated else self.rules
+        signals = evaluate_rules(rules, source, now.timestamp())
         self.last_signals, self.last_run = signals, now
         changes = [*self.store.changes, *(extra_changes or [])]
-        candidates = correlate(signals, self.topo, self.rules, changes, self.store.maintenance_services(),
+        candidates = correlate(signals, self.topo, rules, changes, self.store.maintenance_services(),
                                now, self.s.change_lookback)
         out: list[Incident] = []
         for c in candidates:
@@ -80,9 +126,11 @@ class Engine:
 
     def analyze(self, inc: Incident, signals: list[Signal], source: DataSource,
                 changes: list[ChangeEvent], use_llm: bool = True) -> Incident:
+        history = self.store.list if self.has_feature("history_rag") else (lambda: [])
         tools = AgentTools(source, self.topo, self.kb, changes_provider=lambda: changes,
-                           incidents_provider=self.store.list, incident=inc)
-        inc.rca = run_rca(inc, signals, tools, self.llm if use_llm else None)
+                           incidents_provider=history, incident=inc)
+        llm = self.llm if (use_llm and self.has_feature("ai_rca")) else None
+        inc.rca = run_rca(inc, signals, tools, llm)
         return inc
 
     # ------------------------------------------------------------------
@@ -96,7 +144,7 @@ class Engine:
         return sorted(p.stem for p in self.s.scenario_dir.glob("*.json"))
 
     def simulate(self, scenario: dict[str, Any], notify: bool = False, use_llm: bool = True) -> list[Incident]:
-        src = StaticSource(scenario, self.rules.rules)
+        src = StaticSource(scenario, self.all_rules.rules)
         now = utcnow()
         changes = [ChangeEvent(service=c["service"], type=c.get("type", "deployment"),
                                description=c.get("description", ""),

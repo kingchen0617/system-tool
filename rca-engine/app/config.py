@@ -46,5 +46,14 @@ class Settings:
     smtp_tls: bool = field(default_factory=lambda: _bool(os.getenv("SMTP_TLS"), True))
     public_url: str = field(default_factory=lambda: os.getenv("PUBLIC_URL", "http://localhost:8000"))
 
+    # ---- 授權 ----
+    license_key: str = field(default_factory=lambda: os.getenv("LICENSE_KEY", ""))
+    license_file: str = field(default_factory=lambda: os.getenv("LICENSE_FILE", ""))  # 預設 DATA_DIR/license.key
+    license_server_url: str = field(default_factory=lambda: os.getenv("LICENSE_SERVER_URL", ""))
+    license_refresh_hours: float = field(default_factory=lambda: float(os.getenv("LICENSE_REFRESH_HOURS", "12")))
+    telemetry_opt_in: bool = field(default_factory=lambda: _bool(os.getenv("TELEMETRY_OPT_IN"), False))
+    # 設定後，修改授權等管理 API 需帶 Header：X-Admin-Token
+    admin_token: str = field(default_factory=lambda: os.getenv("ENGINE_ADMIN_TOKEN", ""))
+
 
 settings = Settings()
