@@ -4,7 +4,3 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
-license-server/secrets/
-license-server/data/
-*.pem
-*.lic

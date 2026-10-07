@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 — 2026-10-07
+
+- **暫時移除商業授權機制**：拿掉 License Client、方案分級與功能限制、授權伺服器（`license-server/`）、`/license` 相關 API 與 CLI、`LICENSING.md`、`EULA.md`。所有功能恢復為不受限制。之後商業化時再加回（程式仍保留在 git 歷史，commit `v0.3: …`）。
+- `LICENSE` 簡化為著作權聲明；`THIRD_PARTY_NOTICES.md` 移除授權相關元件。
+- README 改為圖文說明，並移除與其他產品的比較內容；流程圖文件同步調整。
+
 ## v0.3.0 — 2026-10-07｜Commercial Foundation
 
 依與 ChatGPT 討論的商業模式，加入地端安裝 + 線上授權機制。

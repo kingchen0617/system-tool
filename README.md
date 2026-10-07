@@ -4,9 +4,9 @@
 
 > **AI 事故調查與根因分析平台**（AI Incident Investigation & RCA Platform）
 >
-> 版本 **v0.3.0** · [更新紀錄](CHANGELOG.md) · [流程圖](docs/product-flowcharts.md) · [技術說明](docs/technical-guide.md) · [授權說明](LICENSING.md)
+> 版本 **v0.3.1** · [更新紀錄](CHANGELOG.md) · [流程圖](docs/product-flowcharts.md) · [技術說明](docs/technical-guide.md)
 
-一般監控系統只會告訴你「哪裡異常」；system-tool 會告訴你：
+系統出問題時，system-tool 會告訴你：
 
 | ❓ 你想知道的 | ✅ system-tool 的回答 |
 |---|---|
@@ -29,9 +29,8 @@
 6. [5 分鐘快速體驗](#-5-分鐘快速體驗)
 7. [完整安裝](#-完整安裝docker)
 8. [接上你的系統](#-接上你的系統)
-9. [方案與授權](#-方案與授權)
-10. [常見問題](#-常見問題)
-11. [文件導覽與 Roadmap](#-文件導覽)
+9. [常見問題](#-常見問題)
+10. [文件導覽與 Roadmap](#-文件導覽)
 
 ---
 
@@ -262,7 +261,7 @@ python -m app.cli evaluate --no-llm
 ## 🐳 完整安裝（Docker）
 
 ```bash
-cp .env.example .env                               # 1. 複製設定檔（通知管道、授權等）
+cp .env.example .env                               # 1. 複製設定檔（通知管道等）
 docker compose up -d --build                       # 2. 啟動全部服務
 docker compose exec ollama ollama pull qwen3:4b    # 3. 第一次下載 AI 模型
 
@@ -275,7 +274,7 @@ curl -X POST localhost:8000/test/incident -H 'Content-Type: application/json' \
 
 | 畫面 | 網址 |
 |---|---|
-| 🏠 system-tool 首頁（事件列表、授權狀態） | http://localhost:8000 |
+| 🏠 system-tool 首頁（事件列表） | http://localhost:8000 |
 | 📘 API 文件 | http://localhost:8000/docs |
 | 📊 Grafana（帳密 admin / admin） | http://localhost:3000 |
 | 📈 Prometheus | http://localhost:9090 |
@@ -320,44 +319,12 @@ flowchart LR
 
 ---
 
-## 💼 方案與授權
-
-system-tool 是**商業授權軟體**，採「裝在你的環境 + 線上授權」。沒有授權時，會以免費的 Community 方案運作。
-
-| | Community | Professional | Business | Enterprise |
-|---|:---:|:---:|:---:|:---:|
-| 可監控服務數 | 5 | 50 | 200 | 不限 |
-| 規則式根因分析 | ✅ | ✅ | ✅ | ✅ |
-| AI 根因分析（Ollama／Qwen） | | ✅ | ✅ | ✅ |
-| Slack／LINE／Email 通知 | | ✅ | ✅ | ✅ |
-| 部署變更關聯、維護時段 | | ✅ | ✅ | ✅ |
-| 工程師回饋資料集、歷史事件檢索 | | | ✅ | ✅ |
-| 雲端 AI、AWS、SSO、高可用 | | | | ✅ |
-| 離線授權（不需連網） | | | | ✅ |
-
-```mermaid
-flowchart LR
-    K["輸入 License Key"] --> A["連線授權伺服器啟用"] --> V["✅ 正常使用<br/>每 12 小時自動續驗"]
-    V -->|"網路斷了"| G["⏳ 照常運作<br/>7 天租期 + 14 天寬限"]
-    G -->|"恢復連線"| V
-    G -->|"寬限期也過了"| C["⬇️ 降為 Community<br/>不會停止監控、不刪資料"]
-```
-
-```bash
-python -m app.cli license activate ST1.xxxx...   # 啟用
-python -m app.cli license status                 # 查看狀態
-```
-
-詳細說明見 [LICENSING.md](LICENSING.md)，授權條款見 [LICENSE](LICENSE) 與 [EULA](EULA.md)，第三方元件授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
----
-
 ## ❓ 常見問題
 
 <details>
 <summary><b>會把我的監控資料傳出去嗎？</b></summary>
 
-不會。AI 跑在你自己的主機上（Ollama）。授權續驗只會傳送授權編號、主機識別碼和版本，**不含任何監控資料**。使用量統計（服務數、事件數）要你自己開啟 `TELEMETRY_OPT_IN=true` 才會傳。
+不會。system-tool 和 AI（Ollama）都跑在你自己的主機上，監控資料不會傳到外部。
 </details>
 
 <details>
@@ -373,15 +340,9 @@ python -m app.cli license status                 # 查看狀態
 </details>
 
 <details>
-<summary><b>它跟 Grafana、夜鶯這類監控系統有什麼不同？</b></summary>
-
-那些系統負責「看見問題」（哪裡異常）；system-tool 負責「理解問題」（為什麼異常、哪個才是根因、證據是什麼）。它可以讀取你現有的 Prometheus／Loki 資料，不需要換掉原本的監控。詳見 [產品定位與流程圖](docs/product-flowcharts.md)。
-</details>
-
-<details>
 <summary><b>判斷錯了怎麼辦？</b></summary>
 
-每次判斷都會附上證據、已排除項目和其他候選，方便人工確認。工程師可以透過 `POST /incidents/{id}/feedback` 回報對錯和真正的原因，系統會累積成資料集，讓之後判斷得更準（Business 方案以上）。
+每次判斷都會附上證據、已排除項目和其他候選，方便人工確認。工程師可以透過 `POST /incidents/{id}/feedback` 回報對錯和真正的原因，系統會累積成資料集，讓之後判斷得更準。
 </details>
 
 ---
@@ -390,19 +351,18 @@ python -m app.cli license status                 # 查看狀態
 
 | 文件 | 內容 | 適合誰 |
 |---|---|---|
-| [docs/product-flowcharts.md](docs/product-flowcharts.md) | 產品定位、目標架構、六大差異化流程圖 | 主管、客戶、合作夥伴 |
+| [docs/product-flowcharts.md](docs/product-flowcharts.md) | 目標架構、核心能力流程圖、Roadmap | 主管、客戶、合作夥伴 |
 | [docs/technical-guide.md](docs/technical-guide.md) | 根因演算法、評分細節、API 清單、輸出格式、專案結構 | 開發者、導入工程師 |
-| [LICENSING.md](LICENSING.md) | 授權機制、授權伺服器架設、簽發授權 | 你（賣方）、客戶 IT |
 | [CHANGELOG.md](CHANGELOG.md) | 各版本更新內容 | 所有人 |
 
 ### Roadmap
 
 ```mermaid
 flowchart LR
-    V1["v0.1 ✅<br/>偵測＋規則判斷<br/>＋通知"] --> V2["v0.2 ✅<br/>AI 防亂講<br/>多候選判斷"] --> V3["v0.3 ✅<br/>商業授權"] --> V4["v0.4<br/>AI 自己一步步<br/>調查根因"]:::next --> V5["v0.5<br/>故障傳播圖<br/>設定層根因"] --> V6["v0.6<br/>從回饋中學習<br/>越用越準"]
+    V1["v0.1 ✅<br/>偵測＋規則判斷<br/>＋通知"] --> V2["v0.2～v0.3 ✅<br/>AI 防亂講<br/>多候選判斷"] --> V4["v0.4<br/>AI 自己一步步<br/>調查根因"]:::next --> V5["v0.5<br/>故障傳播圖<br/>設定層根因"] --> V6["v0.6<br/>從回饋中學習<br/>越用越準"]
     classDef next fill:#e8f5e9,stroke:#2e7d32,color:#000
 ```
 
 ---
 
-<sub>© 2026 [授權方名稱]. All rights reserved. 本軟體為專有軟體，未經授權不得重製、散布或使用。</sub>
+<sub>© 2026 [公司名稱]. All rights reserved.</sub>

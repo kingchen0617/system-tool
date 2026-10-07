@@ -2,7 +2,7 @@
 
 system-tool 使用或搭配以下第三方元件。這些元件**不屬於** system-tool 的專有部分，依各自的授權條款提供。
 
-> 本表依 2026-10 公開資訊整理。正式販售前，請用 SBOM 工具（例如 `syft`、`pip-licenses`）針對實際出貨的 image 重新產生完整清單，並請法務確認。
+> 本表依 2026-10 公開資訊整理。正式對外提供前，請用 SBOM 工具（例如 `syft`、`pip-licenses`）針對實際出貨的 image 重新產生完整清單，並請法務確認。
 
 ## A. 隨 rca-engine 打包的 Python 套件
 
@@ -15,7 +15,6 @@ system-tool 使用或搭配以下第三方元件。這些元件**不屬於** sys
 | Pydantic | MIT | 資料驗證 |
 | httpx | BSD-3-Clause | 查詢 Prometheus／Loki |
 | PyYAML | MIT | 設定檔 |
-| cryptography | Apache-2.0 或 BSD-3-Clause | 授權簽章驗證 |
 | pytest（僅開發／測試） | MIT | 測試 |
 
 **義務：** 散布時須附上上述授權全文及著作權聲明（MIT／BSD／Apache-2.0）。可在 image 中放入 `licenses/` 目錄，或用 `pip-licenses --with-license-file` 自動產生。
@@ -38,7 +37,3 @@ system-tool 使用或搭配以下第三方元件。這些元件**不屬於** sys
 - 建議由客戶自行從官方來源拉取這些 image（`docker-compose.yml` 就是這樣做的），system-tool 的安裝包不重新散布它們的二進位檔。
 - 「Grafana」「Loki」是 Grafana Labs 的商標。行銷時請寫成「支援／整合 Grafana」，不要暗示是官方產品。
 - 實際的法律風險，請以律師意見為準。
-
-## C. 授權伺服器（license-server，不出貨給客戶）
-
-FastAPI、Uvicorn、Pydantic、cryptography，授權同上表。
