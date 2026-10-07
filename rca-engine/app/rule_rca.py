@@ -17,7 +17,7 @@ KIND_ZH = {"latency": "延遲", "errors": "錯誤率", "saturation": "資源飽�
 TYPE_ACTIONS: dict[str, list[str]] = {
     "database": ["檢查 slow query log 與執行計畫（EXPLAIN）", "檢查連線數與鎖等待（SHOW PROCESSLIST）", "必要時調整連線池或補索引"],
     "cache": ["檢查 Redis SLOWLOG 與記憶體使用", "確認是否有大 key 或阻塞指令（KEYS、大量 DEL）"],
-    "external": ["確認外部服務商狀態頁或聯繫服務商", "啟用備援服務商或降級（circuit breaker）", "降低重試次數，避免 retry storm"],
+    "external": ["確認外部服務狀態頁或聯繫外部服務", "啟用備援服務或降級（circuit breaker）", "降低重試次數，避免 retry storm"],
     "network": ["檢查 proxy 連線數、worker 數與 file descriptor 上限", "檢查 proxy 到上游的網路與 DNS"],
     "application": ["檢查最近部署，必要時 rollback", "檢查應用程式錯誤 log 與例外堆疊"],
     "worker": ["檢查 queue backlog 與 worker 數量", "檢查失敗 job 的錯誤訊息"],
