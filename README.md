@@ -353,13 +353,14 @@ flowchart LR
 |---|---|---|
 | [docs/product-flowcharts.md](docs/product-flowcharts.md) | 目標架構、核心能力流程圖、Roadmap | 主管、客戶、合作夥伴 |
 | [docs/technical-guide.md](docs/technical-guide.md) | 根因演算法、評分細節、API 清單、輸出格式、專案結構 | 開發者、導入工程師 |
+| [docs/web-console-spec.md](docs/web-console-spec.md) | v0.4 規格：Web Console、3 分鐘新增主機、Linux Agent | 開發者、產品設計 |
 | [CHANGELOG.md](CHANGELOG.md) | 各版本更新內容 | 所有人 |
 
 ### Roadmap
 
 ```mermaid
 flowchart LR
-    V1["v0.1 ✅<br/>偵測＋規則判斷<br/>＋通知"] --> V2["v0.2～v0.3 ✅<br/>AI 防亂講<br/>多候選判斷"] --> V4["v0.4<br/>AI 自己一步步<br/>調查根因"]:::next --> V5["v0.5<br/>故障傳播圖<br/>設定層根因"] --> V6["v0.6<br/>從回饋中學習<br/>越用越準"]
+    V1["v0.1 ✅<br/>偵測＋規則判斷<br/>＋通知"] --> V2["v0.2～v0.3 ✅<br/>AI 防亂講<br/>多候選判斷"] --> V4["v0.4<br/>Web Console<br/>3 分鐘新增主機"]:::next --> V5["v0.5<br/>AI 自己一步步<br/>調查根因"] --> V6["v0.6<br/>故障傳播圖<br/>設定層根因"] --> V7["v0.7<br/>從回饋中學習<br/>越用越準"]
     classDef next fill:#e8f5e9,stroke:#2e7d32,color:#000
 ```
 
