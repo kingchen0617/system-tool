@@ -2,6 +2,8 @@
 
 > 目前版本：**v0.3.0**（變更內容見 [CHANGELOG.md](CHANGELOG.md)）
 >
+> 📊 **產品定位與流程圖：** [docs/product-flowcharts.md](docs/product-flowcharts.md)（差異化定位、目標架構、AI 調查迴圈、假設引擎、故障傳播、Config RCA、Roadmap）
+>
 > **商業授權軟體**：本軟體為專有軟體，依 [LICENSE](LICENSE) 及 [EULA](EULA.md) 授權使用。授權機制說明見 [LICENSING.md](LICENSING.md)；第三方元件授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 用 AI 做系統監控的第一版。它能做到三件事：
