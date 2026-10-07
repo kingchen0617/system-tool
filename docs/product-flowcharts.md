@@ -261,12 +261,15 @@ flowchart TD
 ```mermaid
 flowchart LR
     V1["v0.1 ✅<br/>MVP<br/>偵測 + 規則 RCA + 通知"] --> V2["v0.2～v0.3 ✅<br/>證據 ID 防幻覺<br/>多候選 · 穩健 baseline"]
-    V2 --> V4["v0.4<br/><b>Agentic Investigation</b><br/>假設引擎 · AI 自選工具<br/>Investigation Trail"]:::next
-    V4 --> V5["v0.5<br/><b>Causal / Failure Graph</b><br/>Configuration RCA<br/>Change Intelligence"]
-    V5 --> V6["v0.6<br/><b>Incident Learning</b><br/>回饋資料集 · RAG<br/>準確率評估"]
-    V6 --> V7["之後<br/>Tempo / OTel / AWS Connector<br/>出貨強化（編譯、簽章 image）"]
+    V2 --> V4["v0.4<br/><b>Web Console + Linux Agent</b><br/>3 分鐘新增主機 · 自動探索服務<br/>自動推測依賴"]:::next
+    V4 --> V5["v0.5<br/><b>Agentic Investigation</b><br/>假設引擎 · AI 自選工具<br/>Investigation Trail"]
+    V5 --> V6["v0.6<br/><b>Causal / Failure Graph</b><br/>Configuration RCA<br/>Change Intelligence"]
+    V6 --> V7["v0.7<br/><b>Incident Learning</b><br/>回饋資料集 · RAG<br/>準確率評估"]
+    V7 --> V8["之後<br/>Windows / K8s / SNMP / AWS<br/>出貨強化（編譯、簽章 image）"]
 
     classDef next fill:#e8f5e9,stroke:#2e7d32,color:#000
 ```
+
+v0.4 詳細規格見 [web-console-spec.md](web-console-spec.md)。
 
 **Demo 目標：** 現場丟一個故障給系統，讓客戶看著 system-tool 一步一步查到根因。
