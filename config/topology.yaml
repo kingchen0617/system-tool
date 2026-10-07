@@ -62,7 +62,7 @@ services:
       - provider-api
 
   - id: provider-api
-    name: External Payment Provider
+    name: External Service
     type: external
     owner: payment-team
     criticality: P1
