@@ -1,4 +1,0 @@
-# ⚠ 私鑰與授權資料庫絕對不能 commit
-secrets/
-data/
-.env
