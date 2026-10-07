@@ -1,5 +1,10 @@
 # Changelog
 
+## 未發布
+
+- **新增 v0.4 規格文件** `docs/web-console-spec.md`（與 ChatGPT 討論後定稿）：自有 Web Console（總覽、事件中心、RCA 詳情、Service Map、主機），以及「3 分鐘新增主機」流程——一次性安裝指令、Go 寫的 Linux Agent、自動探索服務、依 TCP 連線推測依賴。
+- Roadmap 調整：v0.4 改為 Web Console + Linux Agent；Agentic Investigation 順延到 v0.5，其後依序順延。
+
 ## v0.3.1 — 2026-10-07
 
 - **暫時移除商業授權機制**：拿掉 License Client、方案分級與功能限制、授權伺服器（`license-server/`）、`/license` 相關 API 與 CLI、`LICENSING.md`、`EULA.md`。所有功能恢復為不受限制。之後商業化時再加回（程式仍保留在 git 歷史，commit `v0.3: …`）。
