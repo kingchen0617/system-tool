@@ -7,7 +7,7 @@ keywords: [deploy, deployment, release, rollback, regression]
 # 部署後回歸（Regression）
 
 ## 判斷重點
-- 錯誤率在部署後數分鐘內上升，而所有依賴服務（DB、Redis、Proxy、服務商）都正常。
+- 錯誤率在部署後數分鐘內上升，而所有依賴服務（DB、Redis、Proxy、外部服務）都正常。
 
 ## 建議處置
 1. 立即評估 rollback 到上一個版本

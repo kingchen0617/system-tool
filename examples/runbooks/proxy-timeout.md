@@ -7,7 +7,7 @@ keywords: [proxy, squid, timeout, connect, filedescriptors]
 # Outbound Proxy（Squid）連線逾時
 
 ## 判斷重點
-- 先看 proxy 自身資源（CPU、記憶體、file descriptor）。資源正常而逾時暴增 → 多半是上游服務商問題（見 provider-outage）。
+- 先看 proxy 自身資源（CPU、記憶體、file descriptor）。資源正常而逾時暴增 → 多半是上游外部服務問題（見 provider-outage）。
 - 資源飽和 + `running out of filedescriptors` → proxy 本身瓶頸。
 
 ## 建議處置
