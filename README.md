@@ -10,11 +10,11 @@
 
 | ❓ 你想知道的 | ✅ system-tool 的回答 |
 |---|---|
-| 到底哪個元件壞了？ | 「**外部金流服務商**」，不是看起來在報錯的 Proxy |
+| 到底哪個元件壞了？ | 「**外部服務**」，不是看起來在報錯的 Proxy |
 | 有多確定？ | 信心度 **85%**（高度可能） |
-| 憑什麼這樣判斷？ | 列出證據：服務商延遲 0.8 秒 → 39 秒；Proxy CPU 正常 |
+| 憑什麼這樣判斷？ | 列出證據：外部服務延遲 0.8 秒 → 39 秒；Proxy CPU 正常 |
 | 哪些已經排除了？ | 資料庫正常、Redis 正常 |
-| 現在該怎麼做？ | 1. 確認服務商狀態　2. 切換備援通道　3. 降低重試次數 |
+| 現在該怎麼做？ | 1. 確認外部服務狀態　2. 切換備援通道　3. 降低重試次數 |
 | 該通知誰？ | 自動通知 **payment-team** |
 
 ---
@@ -37,7 +37,7 @@
 
 ## 🤔 它解決什麼問題？
 
-用一個真實常見的例子說明：**半夜金流入款大量逾時。**
+用一個真實常見的例子說明：**半夜大量請求逾時。**
 
 ```mermaid
 flowchart LR
@@ -57,7 +57,7 @@ flowchart LR
     subgraph AFTER["😌 有 system-tool"]
         direction TB
         A1["📨 一則通知"]
-        A2["根因：外部金流服務商延遲<br/>信心度 85%<br/>證據 + 已排除項目 + 建議處置"]
+        A2["根因：外部服務延遲<br/>信心度 85%<br/>證據 + 已排除項目 + 建議處置"]
         A3["工程師直接處理<br/>⏱ 幾分鐘"]
         A1 --> A2 --> A3
     end
@@ -65,7 +65,7 @@ flowchart LR
     BEFORE ~~~ AFTER
 ```
 
-**最容易誤判的地方：** Proxy 一直報 timeout，大家直覺會以為是 Proxy 壞了。system-tool 會先檢查 Proxy 的 CPU、記憶體是否正常；正常的話，就沿著依賴往下查，最後發現真正異常的是**外部服務商**。Proxy 只是「被連累」。
+**最容易誤判的地方：** Proxy 一直報 timeout，大家直覺會以為是 Proxy 壞了。system-tool 會先檢查 Proxy 的 CPU、記憶體是否正常；正常的話，就沿著依賴往下查，最後發現真正異常的是**外部服務**。Proxy 只是「被連累」。
 
 ---
 
@@ -102,7 +102,7 @@ flowchart TD
     JOB["Payment Worker"] --> RD
     JOB --> DB
     JOB --> PX
-    PX --> PV["🔴 外部服務商<br/>延遲 0.8s → 39s<br/><b>← 真正的根因</b>"]
+    PX --> PV["🔴 外部服務<br/>延遲 0.8s → 39s<br/><b>← 真正的根因</b>"]
 
     style PV fill:#fde2e1,stroke:#c62828,color:#000
     style PX fill:#fff4e0,stroke:#ef6c00,color:#000
@@ -161,7 +161,7 @@ flowchart LR
     A["發現異常"] --> B{"打分數"}
     B -->|"0～2 分"| C["🔇 忽略<br/>例：CPU 瞬間跳一下"]
     B -->|"3～4 分"| D["📝 只記錄<br/>例：Queue 稍微堆積"]
-    B -->|"5 分以上"| E["🚨 通知負責人<br/>例：服務商逾時連帶 API 變慢"]
+    B -->|"5 分以上"| E["🚨 通知負責人<br/>例：外部服務逾時連帶 API 變慢"]
 ```
 
 | 加分（越像真問題） | 扣分（越像雜訊） |
@@ -206,7 +206,7 @@ git clone https://github.com/kingchen0617/system-tool.git
 cd system-tool/rca-engine
 pip install -r requirements.txt
 
-# 模擬一次「外部服務商逾時」
+# 模擬一次「外部服務逾時」
 python -m app.cli simulate provider-timeout --no-llm
 ```
 
@@ -216,7 +216,7 @@ python -m app.cli simulate provider-timeout --no-llm
 🔴 [CRITICAL] INC-20261006-0001
 受影響服務：payment-api
 可疑元件：provider-api（信心度 85%，高度可能）
-根因判斷：External Payment Provider（external）延遲/錯誤率異常，沿依賴鏈影響上游服務：proxy → payment-api、payment-job
+根因判斷：External Service（external）延遲/錯誤率異常，沿依賴鏈影響上游服務：proxy → payment-api、payment-job
 證據：
   • provider-api provider-latency: 目前 39.00 (基準 0.8100, z=332.2) 門檻 > 5.00
   • provider-api provider-error-rate: 目前 0.4700 (基準 0.0086, z=85.1) 門檻 > 0.1000
@@ -225,8 +225,8 @@ python -m app.cli simulate provider-timeout --no-llm
   • payment-job job-queue-depth 正常（298）→ 非 payment-job 本身資源不足
 已排除：mariadb、redis
 建議處置：
-  1. 確認服務商狀態頁，並聯繫服務商技術窗口
-  2. 啟用備援服務商或暫時關閉該通道（circuit breaker）
+  1. 確認外部服務狀態頁，並聯繫外部服務的技術窗口
+  2. 啟用備援服務或暫時關閉該通道（circuit breaker）
   3. 降低重試次數與並行數，避免 retry storm 拖垮 worker
 負責人：payment-team　（推理來源：rule）
 ```
@@ -243,7 +243,7 @@ python -m app.cli evaluate --no-llm
 
 | 情境 | 正確答案 |
 |---|---|
-| `provider-timeout` 外部服務商逾時（Proxy 本身正常） | 外部服務商 |
+| `provider-timeout` 外部服務逾時（Proxy 本身正常） | 外部服務 |
 | `proxy-saturation` Proxy 資源耗盡 | Proxy |
 | `db-latency` 資料庫慢查詢暴增 | MariaDB |
 | `db-connection-exhaustion` 資料庫連線數耗盡 | MariaDB |
