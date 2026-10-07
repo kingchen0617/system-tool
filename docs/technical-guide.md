@@ -119,7 +119,7 @@ z = (recent 平均 − baseline 中位數) / (1.4826 × MAD)
 
 `examples/sample-incidents/` 目前有 11 個情境：
 
-- **一般故障：** 服務商逾時、DB 慢查詢、DB 連線耗盡、Redis 延遲、部署回歸、Proxy 資源耗盡。
+- **一般故障：** 外部服務逾時、DB 慢查詢、DB 連線耗盡、Redis 延遲、部署回歸、Proxy 資源耗盡。
 - **v0.2 新增：**
   - 持續 15 分鐘的 DB 問題（測 baseline 不被污染）
   - 只有 API 5xx 但很嚴重（測單一嚴重訊號仍會通知）
