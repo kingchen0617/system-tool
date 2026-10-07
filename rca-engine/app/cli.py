@@ -4,9 +4,6 @@
   python -m app.cli simulate provider-timeout --no-llm # 只用規則式 RCA
   python -m app.cli evaluate                           # 跑全部情境，計算 Top-1 / Top-3 準確率與誤報率
   python -m app.cli detect                             # 對真實 Prometheus/Loki 跑一次偵測
-  python -m app.cli license status                     # 查看授權狀態
-  python -m app.cli license activate <License Key>     # 設定 License Key 並線上啟用
-  python -m app.cli license refresh | deactivate
 """
 from __future__ import annotations
 
@@ -90,40 +87,6 @@ def cmd_detect(args) -> int:
     return 0
 
 
-def cmd_license(args) -> int:
-    eng = Engine(settings, persist=True)
-    lm = eng.license_manager
-    if args.action == "activate":
-        if not args.key:
-            print("請提供 License Key")
-            return 2
-        try:
-            lm.set_license_key(args.key)
-        except ValueError as e:
-            print(f"❌ License Key 無效：{e}")
-            return 1
-        st = eng.refresh_license()
-    elif args.action == "refresh":
-        st = eng.refresh_license()
-    elif args.action == "deactivate":
-        print("已停用本機" if lm.deactivate() else "停用失敗（未設定授權或無法連線授權伺服器）")
-        st = eng.apply_license()
-    else:
-        st = eng.license
-    print(f"狀態：{st.status}｜{st.reason}")
-    print(f"生效方案：{st.edition}（授權方案 {st.licensed_edition or '-'}）｜客戶：{st.customer or '-'}｜{st.license_id or ''}")
-    print(f"到期：{st.expires_at or '-'}｜租期：{st.lease_expires_at or '-'}｜寬限至：{st.grace_until or '-'}")
-    print(f"服務上限：{st.max_services or '不限'}｜監控中：{len(eng.monitored_services)}"
-          + (f"｜未監控：{', '.join(eng.unmonitored_by_license)}" if eng.unmonitored_by_license else ""))
-    print(f"功能：{', '.join(st.features)}")
-    print(f"Instance ID：{st.instance_id}")
-    for w in st.warnings:
-        print(f"⚠ {w}")
-    if st.last_error:
-        print(f"最近錯誤：{st.last_error}")
-    return 0 if st.active else 1
-
-
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="system-tool")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -139,10 +102,6 @@ def main(argv=None) -> int:
     d.add_argument("--no-llm", action="store_true")
     d.add_argument("--no-notify", action="store_true")
     d.set_defaults(fn=cmd_detect)
-    lc = sub.add_parser("license")
-    lc.add_argument("action", choices=["status", "activate", "refresh", "deactivate"])
-    lc.add_argument("key", nargs="?")
-    lc.set_defaults(fn=cmd_license)
     args = p.parse_args(argv)
     return args.fn(args)
 

@@ -7,14 +7,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from . import __version__
 from .config import settings
 from .engine import Engine
-from .licensing import FEATURE_NAMES
 from .models import ChangeEvent, Incident
 
 engine = Engine(settings)
@@ -32,42 +30,17 @@ def _loop() -> None:
         _stop.wait(settings.detection_interval)
 
 
-def _license_loop() -> None:
-    """啟動時立即啟用 / 續驗，之後每 LICENSE_REFRESH_HOURS 小時一次；失敗時 30 分鐘後重試。"""
-    while not _stop.is_set():
-        try:
-            st = engine.refresh_license()
-            print(f"[license] {st.status}：{st.reason}（生效方案 {st.edition}）")
-            wait = settings.license_refresh_hours * 3600 if st.last_error is None else 1800
-        except Exception as e:
-            print(f"[license] refresh failed: {e}")
-            wait = 1800
-        _stop.wait(wait)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    threading.Thread(target=_license_loop, daemon=True, name="license").start()
+    t = None
     if settings.detection_enabled:
-        threading.Thread(target=_loop, daemon=True, name="detector").start()
+        t = threading.Thread(target=_loop, daemon=True, name="detector")
+        t.start()
     yield
     _stop.set()
 
 
-app = FastAPI(title="system-tool · AI SRE RCA Engine", version=__version__, lifespan=lifespan)
-
-
-def require_feature(feature: str):
-    def dep() -> None:
-        if not engine.has_feature(feature):
-            raise HTTPException(402, {"code": "feature_not_licensed", "feature": feature,
-                                      "message": f"目前方案（{engine.license.edition}）不含「{FEATURE_NAMES.get(feature, feature)}」功能"})
-    return dep
-
-
-def require_admin(x_admin_token: str = Header(default="")) -> None:
-    if settings.admin_token and x_admin_token != settings.admin_token:
-        raise HTTPException(401, "需要 X-Admin-Token")
+app = FastAPI(title="system-tool · AI SRE RCA Engine", version="0.3.1", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -80,9 +53,6 @@ def health() -> dict[str, Any]:
         "rules": len(engine.rules.rules),
         "services": len(engine.topo.services),
         "last_detection": engine.last_run,
-        "version": __version__,
-        "license": {"status": engine.license.status, "edition": engine.license.edition,
-                    "reason": engine.license.reason, "warnings": engine.license.warnings},
     }
 
 
@@ -173,7 +143,7 @@ class ChangeReq(BaseModel):
     author: Optional[str] = None
 
 
-@app.post("/changes", dependencies=[Depends(require_feature("change_tracking"))])
+@app.post("/changes")
 def add_change(req: ChangeReq) -> ChangeEvent:
     """CI/CD 部署完成時呼叫，讓 RCA 能關聯「最近變更」"""
     if not engine.topo.get(req.service):
@@ -188,7 +158,7 @@ class MaintenanceReq(BaseModel):
     minutes: int = 60
 
 
-@app.post("/maintenance", dependencies=[Depends(require_feature("maintenance"))])
+@app.post("/maintenance")
 def maintenance(req: MaintenanceReq) -> dict[str, Any]:
     until = datetime.now(timezone.utc) + timedelta(minutes=req.minutes)
     engine.store.maintenance[req.service] = until
@@ -203,7 +173,7 @@ class FeedbackReq(BaseModel):
     recovered: Optional[bool] = None
 
 
-@app.post("/incidents/{incident_id}/feedback", dependencies=[Depends(require_feature("feedback_dataset"))])
+@app.post("/incidents/{incident_id}/feedback")
 def feedback(incident_id: str, req: FeedbackReq) -> dict[str, Any]:
     """工程師回饋 RCA 對錯 → 累積成 RCA 評估資料集"""
     inc = engine.store.incidents.get(incident_id)
@@ -216,46 +186,6 @@ def feedback(incident_id: str, req: FeedbackReq) -> dict[str, Any]:
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- 授權
-@app.get("/license")
-def license_status() -> dict[str, Any]:
-    st = engine.license
-    return st.model_dump() | {
-        "monitored_services": engine.monitored_services,
-        "unmonitored_by_license": engine.unmonitored_by_license,
-        "feature_names": {f: FEATURE_NAMES.get(f, f) for f in st.features},
-    }
-
-
-class LicenseReq(BaseModel):
-    license_key: str
-
-
-@app.post("/license", dependencies=[Depends(require_admin)])
-def set_license(req: LicenseReq) -> dict[str, Any]:
-    """輸入新的 License Key 並立即線上啟用"""
-    try:
-        engine.license_manager.set_license_key(req.license_key)
-    except ValueError as e:
-        raise HTTPException(400, f"License Key 無效：{e}")
-    engine.refresh_license()
-    return license_status()
-
-
-@app.post("/license/refresh", dependencies=[Depends(require_admin)])
-def refresh_license() -> dict[str, Any]:
-    engine.refresh_license()
-    return license_status()
-
-
-@app.post("/license/deactivate", dependencies=[Depends(require_admin)])
-def deactivate_license() -> dict[str, Any]:
-    """換主機前先停用本機，釋放啟用名額"""
-    ok = engine.license_manager.deactivate()
-    engine.apply_license()
-    return {"deactivated": ok} | license_status()
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     rows = "".join(
@@ -265,16 +195,5 @@ def index() -> str:
         for i in engine.store.list(50))
     return f"""<!doctype html><meta charset=utf-8><title>system-tool</title>
 <style>body{{font-family:sans-serif;margin:24px}}td,th{{border-bottom:1px solid #ddd;padding:6px;text-align:left}}</style>
-<h2>system-tool · AI SRE RCA</h2>{_license_banner()}<p><a href=/docs>API 文件</a> · <a href=/services>服務狀態</a> · <a href=/signals>訊號</a></p>
+<h2>system-tool · AI SRE RCA</h2><p><a href=/docs>API 文件</a> · <a href=/services>服務狀態</a> · <a href=/signals>訊號</a></p>
 <table><tr><th>ID</th><th>狀態</th><th>嚴重度</th><th>受影響</th><th>可疑元件</th><th>信心</th><th>根因</th></tr>{rows}</table>"""
-
-
-def _license_banner() -> str:
-    st = engine.license
-    color = {"valid": "#2e7d32", "grace": "#ef6c00"}.get(st.status, "#c62828")
-    extra = "".join(f"<br>⚠ {w}" for w in st.warnings)
-    if engine.unmonitored_by_license:
-        extra += f"<br>⚠ 超出方案服務數上限，未監控：{', '.join(engine.unmonitored_by_license)}"
-    return (f"<p style='padding:8px;border-left:4px solid {color}'>授權：<b>{st.status}</b>"
-            f"｜生效方案：<b>{st.edition}</b>{'｜' + st.customer if st.customer else ''}｜{st.reason}{extra}"
-            f"｜<a href=/license>詳情</a></p>")
