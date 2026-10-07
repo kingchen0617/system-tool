@@ -1,5 +1,5 @@
 {
-  "name": "Proxy 自身資源耗盡（服務商正常）",
+  "name": "Proxy 自身資源耗盡（外部服務正常）",
   "expected_root_cause": "proxy",
   "metrics": {
     "proxy-cpu": {

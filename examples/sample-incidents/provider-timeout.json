@@ -1,5 +1,5 @@
 {
-  "name": "外部金流服務商逾時（proxy 本身正常）",
+  "name": "外部服務逾時（proxy 本身正常）",
   "expected_root_cause": "provider-api",
   "metrics": {
     "provider-latency": {
