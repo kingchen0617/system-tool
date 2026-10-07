@@ -83,13 +83,8 @@ z = (recent 平均 − baseline 中位數) / (1.4826 × MAD)
 | POST | `/test/incident` | 執行模擬情境 `{"scenario":"db-latency","notify":false,"use_llm":true}` |
 | POST | `/changes` | 登錄部署或設定變更 |
 | POST | `/maintenance` | 設定維護時段 `{"service":"mariadb","minutes":60}` |
-| POST | `/incidents/{id}/feedback` | 工程師回饋 RCA 是否正確，累積評估資料集（Business 以上） |
-| GET | `/license` | 授權狀態、生效方案、功能、監控中的服務 |
-| POST | `/license` | 設定 License Key 並線上啟用 |
-| POST | `/license/refresh` | 立即續驗 |
-| POST | `/license/deactivate` | 停用本機（換主機前執行） |
+| POST | `/incidents/{id}/feedback` | 工程師回饋 RCA 是否正確，累積評估資料集 |
 
-`/changes`、`/maintenance` 需要 Professional 以上；目前方案不含該功能時回傳 HTTP 402。設定 `ENGINE_ADMIN_TOKEN` 後，`/license` 的 POST 操作需帶 `X-Admin-Token` header。
 
 ### RCA 輸出格式
 
@@ -164,15 +159,10 @@ system-tool/
 │   │   ├── knowledge.py       # Runbook 檢索（RAG v0）
 │   │   ├── notifications.py   # Slack / LINE / Email
 │   │   ├── store.py           # 事件儲存（JSON）
-│   │   ├── licensing.py       # 授權用戶端（簽章驗證、線上啟用、方案限制）
-│   │   ├── license_keys.py    # 授權方公鑰
 │   │   ├── models.py          # Pydantic schema
 │   │   └── config.py
-│   └── tests/                 # test_rca.py、test_licensing.py
-├── license-server/            # 授權伺服器 + 簽發工具（賣方使用，不出貨給客戶）
-│   ├── app/{tokens,core,editions,admin,main}.py
-│   └── docker-compose.yml
-├── LICENSE / EULA.md / LICENSING.md / THIRD_PARTY_NOTICES.md
+│   └── tests/test_rca.py
+├── LICENSE / THIRD_PARTY_NOTICES.md
 ├── observability/             # Prometheus / Loki / Grafana 設定
 └── examples/
     ├── runbooks/              # Markdown runbook（含 front matter）

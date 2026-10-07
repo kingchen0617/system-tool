@@ -1,57 +1,39 @@
-# system-tool 產品定位與流程圖
+# system-tool 產品流程圖
 
-> 本文件整理自 2026-10-07 與 ChatGPT 的產品差異化討論。圖表用 Mermaid 繪製，GitHub 會直接渲染。
+> 圖表用 Mermaid 繪製，GitHub 會直接渲染。
 >
-> **一句話定位：** 別的監控系統告訴你「哪裡異常」；system-tool 告訴你「**為什麼**異常、真正故障在哪、證據是什麼、下一步怎麼處理」。
+> **一句話說明：** 系統出問題時，system-tool 告訴你「**為什麼**異常、真正故障在哪、證據是什麼、下一步怎麼處理」。
 >
-> 產品名稱：**AI Incident Investigation & RCA Platform**，不叫「AI 監控平台」。
+> 產品名稱：**AI Incident Investigation & RCA Platform**
 
 ## 目錄
 
-1. [產品定位：傳統監控 vs system-tool](#1-產品定位傳統監控-vs-system-tool)
+1. [處理一個事故的流程](#1-處理一個事故的流程)
 2. [目標架構（五層）](#2-目標架構五層)
-3. [差異 ①：AI 調查迴圈（Agentic Investigation）](#3-差異-ai-調查迴圈agentic-investigation)
-4. [差異 ②：假設引擎（Hypothesis Engine）](#4-差異-假設引擎hypothesis-engine)
-5. [差異 ③：故障傳播圖（Failure Propagation Graph）](#5-差異-故障傳播圖failure-propagation-graph)
-6. [差異 ④：設定層 RCA（Configuration RCA）](#6-差異-設定層-rcaconfiguration-rca)
-7. [差異 ⑤：變更關聯（Change Intelligence）](#7-差異-變更關聯change-intelligence)
-8. [差異 ⑥：RCA 學習迴圈（護城河）](#8-差異-rca-學習迴圈護城河)
-9. [目前 v0.3 已實作的處理流程](#9-目前-v03-已實作的處理流程)
+3. [能力 ①：AI 調查迴圈（Agentic Investigation）](#3-能力-ai-調查迴圈agentic-investigation)
+4. [能力 ②：假設引擎（Hypothesis Engine）](#4-能力-假設引擎hypothesis-engine)
+5. [能力 ③：故障傳播圖（Failure Propagation Graph）](#5-能力-故障傳播圖failure-propagation-graph)
+6. [能力 ④：設定層 RCA（Configuration RCA）](#6-能力-設定層-rcaconfiguration-rca)
+7. [能力 ⑤：變更關聯（Change Intelligence）](#7-能力-變更關聯change-intelligence)
+8. [能力 ⑥：RCA 學習迴圈](#8-能力-rca-學習迴圈)
+9. [目前已實作的處理流程](#9-目前已實作的處理流程)
 10. [Roadmap](#10-roadmap)
 
 ---
 
-## 1. 產品定位：傳統監控 vs system-tool
+## 1. 處理一個事故的流程
 
-傳統監控（夜鶯、Grafana、Zabbix）負責 **Observe**；system-tool 負責 **Understand → Diagnose → Resolve**。我們不跟它們比「監控得更多」，也不把夜鶯當核心依賴。
+system-tool 的工作是 **Understand → Diagnose → Resolve**：理解異常、診斷根因、給出處置建議。
 
 ```mermaid
-flowchart LR
-    subgraph T["傳統監控 / 夜鶯（Observe）"]
-        direction TB
-        T1["CPU 95%"]
-        T2["API P95 12s"]
-        T3["Proxy timeout 200 次"]
-        T4["DB connections 90%"]
-        T5(["一堆告警<br/>工程師自己查"])
-        T1 --> T5
-        T2 --> T5
-        T3 --> T5
-        T4 --> T5
-    end
-
-    subgraph S["system-tool（Understand → Diagnose → Resolve）"]
-        direction TB
-        S1["發現異常"] --> S2["建立 Incident"]
-        S2 --> S3["理解 Service Graph"]
-        S3 --> S4["追查依賴鏈"]
-        S4 --> S5["交叉驗證<br/>Metrics / Logs / Traces / Changes"]
-        S5 --> S6["建立多個 Root Cause 假設"]
-        S6 --> S7["主動查證 / 排除"]
-        S7 --> S8(["Root Cause + 信心度<br/>+ 證據 + 建議處置"])
-    end
-
-    T -.->|"資料來源<br/>（不取代、不綁定）"| S
+flowchart TB
+    S1["發現異常"] --> S2["建立 Incident"]
+    S2 --> S3["理解 Service Graph"]
+    S3 --> S4["追查依賴鏈"]
+    S4 --> S5["交叉驗證<br/>Metrics / Logs / Traces / Changes"]
+    S5 --> S6["建立多個 Root Cause 假設"]
+    S6 --> S7["主動查證 / 排除"]
+    S7 --> S8(["Root Cause + 信心度<br/>+ 證據 + 建議處置"])
 ```
 
 ---
@@ -74,11 +56,11 @@ flowchart TB
 
 ---
 
-## 3. 差異 ①：AI 調查迴圈（Agentic Investigation）
+## 3. 能力 ①：AI 調查迴圈（Agentic Investigation）
 
-AI 要會「調查」，不是只會解讀告警。
+AI 要會「調查」：自己決定下一步查什麼，而不是只讀一次資料就下結論。
 
-- **v0.2／v0.3 現況：** 收集資料 → 一次把 context 丟給 Qwen → Qwen 判斷。
+- **目前：** 收集資料 → 一次把 context 丟給 Qwen → Qwen 判斷。
 - **目標：** AI 自己決定「下一步要查什麼，才能證明或推翻我的假設」，並留下完整的調查紀錄（Investigation Trail）。
 
 ```mermaid
@@ -105,7 +87,7 @@ flowchart TD
 
 ---
 
-## 4. 差異 ②：假設引擎（Hypothesis Engine）
+## 4. 能力 ②：假設引擎（Hypothesis Engine）
 
 不直接說「Root Cause = Proxy」，而是先列出多個假設，再用證據逐步更新機率。
 
@@ -141,7 +123,7 @@ stateDiagram-v2
 
 ---
 
-## 5. 差異 ③：故障傳播圖（Failure Propagation Graph）
+## 5. 能力 ③：故障傳播圖（Failure Propagation Graph）
 
 現在的拓撲只有 `depends_on`，也就是「A 依賴 B」。目標是加上 **failure_modes**，讓系統理解「B 用什麼方式故障時，A 會出現什麼症狀」。
 
@@ -175,7 +157,7 @@ flowchart TD
 
 ---
 
-## 6. 差異 ④：設定層 RCA（Configuration RCA）
+## 6. 能力 ④：設定層 RCA（Configuration RCA）
 
 產品核心要求：**不能只說「Proxy timeout」，要分辨是資源不足、設定錯誤、軟體限制，還是上游問題。**
 
@@ -197,7 +179,7 @@ flowchart TD
 
 ---
 
-## 7. 差異 ⑤：變更關聯（Change Intelligence）
+## 7. 能力 ⑤：變更關聯（Change Intelligence）
 
 很多事故來自部署、設定、防火牆、DB schema、套件更新或基礎設施變更。system-tool 會把**變更**和**症狀**排成時間軸，判斷兩者的因果關係。
 
@@ -220,9 +202,9 @@ flowchart LR
 
 ---
 
-## 8. 差異 ⑥：RCA 學習迴圈（護城河）
+## 8. 能力 ⑥：RCA 學習迴圈
 
-每次事故結束後，請工程師確認 AI 判斷得對不對。累積一年後，就會得到其他公司很難複製的資料集。
+每次事故結束後，請工程師確認 AI 判斷得對不對。累積下來的資料，會讓之後的判斷越來越準。
 
 ```mermaid
 flowchart LR
@@ -240,18 +222,16 @@ flowchart LR
 
 資料集內容：Symptoms ＋ Topology ＋ Metrics ＋ Logs ＋ Configuration ＋ Changes ＋ AI Hypothesis ＋ Actual Root Cause ＋ Engineer Action ＋ Recovery Result。
 
-> 目前已有 `POST /incidents/{id}/feedback` 收集回饋（Business 方案以上）；評估工具是 `python -m app.cli evaluate`。
+> 目前已有 `POST /incidents/{id}/feedback` 收集回饋；評估工具是 `python -m app.cli evaluate`。
 
 ---
 
-## 9. 目前 v0.3 已實作的處理流程
+## 9. 目前已實作的處理流程
 
 這張圖是**現在程式實際的運作方式**，方便和上面的目標架構對照。
 
 ```mermaid
 flowchart TD
-    L["License Client<br/>線上啟用 / 續驗"] -->|"決定方案：服務上限、AI、通知"| ENG
-
     subgraph ENG["rca-engine（每 60 秒）"]
         direction TB
         D1["Prometheus / Loki<br/>查詢規則序列"] --> D2["偵測<br/>固定門檻（持續 for 秒）<br/>＋ 穩健 z-score（median + MAD + guard band）"]
@@ -262,7 +242,7 @@ flowchart TD
         D4 -->|"≥ 5"| D5["建立 Incident"]
         D5 --> D6["白名單工具收集證據<br/>（全部寫入稽核紀錄）"]
         D6 --> D7["規則式 RCA<br/>候選排名 + 信心度"]
-        D7 --> D8{"有 AI 授權且<br/>Ollama 可用？"}
+        D7 --> D8{"Ollama 可用？"}
         D8 -->|"是"| D9["Qwen 推理<br/>只能引用證據 ID"]
         D9 -->|"驗證失敗 ×2"| D10
         D8 -->|"否"| D10["使用規則式結果"]
@@ -278,13 +258,10 @@ flowchart TD
 
 ## 10. Roadmap
 
-ChatGPT 建議的順序是「差異化優先、授權最後」。不過授權機制已經在 v0.3 完成，所以後續版本號往後順延：
-
 ```mermaid
 flowchart LR
-    V1["v0.1 ✅<br/>MVP<br/>偵測 + 規則 RCA + 通知"] --> V2["v0.2 ✅<br/>證據 ID 防幻覺<br/>多候選 · 穩健 baseline"]
-    V2 --> V3["v0.3 ✅<br/>商業授權<br/>線上 / 離線 · 方案分級"]
-    V3 --> V4["v0.4<br/><b>Agentic Investigation</b><br/>假設引擎 · AI 自選工具<br/>Investigation Trail"]:::next
+    V1["v0.1 ✅<br/>MVP<br/>偵測 + 規則 RCA + 通知"] --> V2["v0.2～v0.3 ✅<br/>證據 ID 防幻覺<br/>多候選 · 穩健 baseline"]
+    V2 --> V4["v0.4<br/><b>Agentic Investigation</b><br/>假設引擎 · AI 自選工具<br/>Investigation Trail"]:::next
     V4 --> V5["v0.5<br/><b>Causal / Failure Graph</b><br/>Configuration RCA<br/>Change Intelligence"]
     V5 --> V6["v0.6<br/><b>Incident Learning</b><br/>回饋資料集 · RAG<br/>準確率評估"]
     V6 --> V7["之後<br/>Tempo / OTel / AWS Connector<br/>出貨強化（編譯、簽章 image）"]
@@ -292,4 +269,4 @@ flowchart LR
     classDef next fill:#e8f5e9,stroke:#2e7d32,color:#000
 ```
 
-**Demo 目標：** 現場丟一個故障給系統，讓客戶看著 system-tool 一步一步查到根因。這是和一般監控系統最直觀的差別。
+**Demo 目標：** 現場丟一個故障給系統，讓客戶看著 system-tool 一步一步查到根因。
