@@ -1,91 +1,216 @@
-# system-tool：AI SRE／自動根因分析（RCA）平台 MVP
+# system-tool
 
-> 目前版本：**v0.3.0**（變更內容見 [CHANGELOG.md](CHANGELOG.md)）
+### 系統出問題時，告訴你「**為什麼**」壞掉
+
+> **AI 事故調查與根因分析平台**（AI Incident Investigation & RCA Platform）
 >
-> 📊 **產品定位與流程圖：** [docs/product-flowcharts.md](docs/product-flowcharts.md)（差異化定位、目標架構、AI 調查迴圈、假設引擎、故障傳播、Config RCA、Roadmap）
->
-> **商業授權軟體**：本軟體為專有軟體，依 [LICENSE](LICENSE) 及 [EULA](EULA.md) 授權使用。授權機制說明見 [LICENSING.md](LICENSING.md)；第三方元件授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+> 版本 **v0.3.0** · [更新紀錄](CHANGELOG.md) · [流程圖](docs/product-flowcharts.md) · [技術說明](docs/technical-guide.md) · [授權說明](LICENSING.md)
 
-用 AI 做系統監控的第一版。它能做到三件事：
+一般監控系統只會告訴你「哪裡異常」；system-tool 會告訴你：
 
-1. **自動判斷系統健康狀態**：固定門檻加上動態基準（z-score），並用多訊號評分來降低誤報。
-2. **出問題時自動找根本原因**：沿著服務拓撲找出「最深的異常節點」，由本地 Ollama／Qwen 根據證據推理。沒有 LLM 時，自動改用規則式推理。
-3. **明確指出是哪個系統出問題，並通知負責人**：依 owner 和嚴重度，送到 Slack／LINE／Email。
-
-> 定位：**唯讀的 AI SRE**。它只查詢 Prometheus／Loki，不會重啟服務、修改設定，也不會登入主機。
+| ❓ 你想知道的 | ✅ system-tool 的回答 |
+|---|---|
+| 到底哪個元件壞了？ | 「**外部金流服務商**」，不是看起來在報錯的 Proxy |
+| 有多確定？ | 信心度 **85%**（高度可能） |
+| 憑什麼這樣判斷？ | 列出證據：服務商延遲 0.8 秒 → 39 秒；Proxy CPU 正常 |
+| 哪些已經排除了？ | 資料庫正常、Redis 正常 |
+| 現在該怎麼做？ | 1. 確認服務商狀態　2. 切換備援通道　3. 降低重試次數 |
+| 該通知誰？ | 自動通知 **payment-team** |
 
 ---
 
-## 架構
+## 📖 目錄
 
-```
- Nginx / Laravel / Worker / Redis / MariaDB / Proxy / 外部服務商
-                │ metrics / logs
-                ▼
-   Prometheus (metrics)      Loki (logs)        ← Grafana 視覺化
-                │                 │
-                └──────┬──────────┘
-                       ▼
-┌──────────────────── rca-engine（Python / FastAPI）────────────────────┐
-│ 1. Detection   rules.yaml：固定門檻（需持續 for 秒）+ 穩健 z-score 基準 │
-│ 2. Correlation topology.yaml：把異常服務依依賴關係分組                  │
-│ 3. Scoring     多訊號評分 ≥5 才算 Incident（瞬間尖峰、維護中會扣分）     │
-│ 4. Agent Tools 白名單唯讀工具收集證據（全部寫入稽核紀錄）                │
-│                query_prometheus / query_loki / get_topology /          │
-│                get_dependencies / get_service_owner / search_runbook / │
-│                search_incidents / get_recent_changes                   │
-│ 5. Reasoning   Ollama/Qwen（只能引用證據 ID）→ 驗證 → 重試 → 規則式 RCA │
-│ 6. Notify      依 owner + severity 路由到 Slack / LINE / Email         │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### RCA 推理邏輯
-
-- `depends_on` 表示「我呼叫誰」。下游故障會往上游傳遞，所以依賴都正常的異常服務最可能是 root cause。
-- **多候選排序**：每個異常服務都會計算候選分數，最後依分數排序，不會只硬選一個。
-
-  | 項目 | 說明 |
-  |---|---|
-  | downstream_health | 它的依賴全部正常 +3；有依賴也異常（較可能只是症狀）−3 |
-  | propagation | 其他異常服務中，「依賴它」（能被它解釋）的比例 × 3 |
-  | signal_strength | 異常訊號數、是否持續超標、z-score 大小 |
-  | change | 這個服務最近有部署或設定變更 |
-
-- **信心度主要看第一名領先第二名多少**：分數接近時，會列出所有接近的候選並標為 `unknown`。如果候選之間沒有依賴關係，會提示「可能是兩個獨立故障，或共同的網路／基礎設施問題」。
-- 中間節點如果自身資源正常（例如 proxy CPU 正常但逾時暴增），會被判定為「症狀」，不是原因。
-- 如果只有應用程式本身異常、依賴全部正常，而且 30 分鐘內有部署，就判定為部署回歸（regression）。
-- 信心度分三級：≥85% 為 `likely`（高度可能），60–84% 為 `suspected`（疑似），<60% 為 `unknown`（證據不足，不會假裝知道）。
-
-### LLM 防幻覺：只推理，不創造事實
-
-1. 收集到的每個事實（指標、log、變更、runbook、歷史事件）都會給一個 ID，例如 `sig_provider-latency`、`log_proxy_0`、`chg_0`。
-2. LLM 只能回傳 `evidence_ids`，不能自己寫證據。證據內容由 Python 從已收集的資料重新組裝。
-3. 下列情況都算驗證失敗：引用不存在的 ID、指認拓撲中不存在的服務、把有異常訊號的服務列進 `ruled_out`。驗證失敗會重試一次，仍失敗就改用規則式 RCA。
-4. 如果 LLM 指認的元件沒有異常訊號，或它引用的證據都和這個元件無關，信心度會被壓到 0.5 以下。
-
-LLM 回傳格式：
-
-```json
-{"suspected_component": "provider-api", "root_cause": "…", "confidence": 0.9,
- "evidence_ids": ["sig_provider-latency", "sig_proxy-cpu", "log_proxy_0"],
- "ruled_out": ["redis", "mariadb"], "recommended_actions": ["…"]}
-```
+1. [它解決什麼問題？](#-它解決什麼問題)
+2. [它是怎麼找到原因的？](#-它是怎麼找到原因的)
+3. [它會放在哪裡？](#-它會放在哪裡)
+4. [為什麼不會一直亂發告警？](#-為什麼不會一直亂發告警)
+5. [為什麼 AI 不會亂講？](#-為什麼-ai-不會亂講)
+6. [5 分鐘快速體驗](#-5-分鐘快速體驗)
+7. [完整安裝](#-完整安裝docker)
+8. [接上你的系統](#-接上你的系統)
+9. [方案與授權](#-方案與授權)
+10. [常見問題](#-常見問題)
+11. [文件導覽與 Roadmap](#-文件導覽)
 
 ---
 
-## 快速開始
+## 🤔 它解決什麼問題？
 
-### A. 不需要 Docker：先用模擬情境體驗
+用一個真實常見的例子說明：**半夜金流入款大量逾時。**
+
+```mermaid
+flowchart LR
+    subgraph BEFORE["😩 沒有 system-tool"]
+        direction TB
+        B1["🔔 API 延遲告警"]
+        B2["🔔 Proxy timeout 告警"]
+        B3["🔔 Queue 堆積告警"]
+        B4["🔔 Job 失敗告警"]
+        B5["工程師被吵醒<br/>一台一台登入查<br/>⏱ 30～60 分鐘"]
+        B1 --> B5
+        B2 --> B5
+        B3 --> B5
+        B4 --> B5
+    end
+
+    subgraph AFTER["😌 有 system-tool"]
+        direction TB
+        A1["📨 一則通知"]
+        A2["根因：外部金流服務商延遲<br/>信心度 85%<br/>證據 + 已排除項目 + 建議處置"]
+        A3["工程師直接處理<br/>⏱ 幾分鐘"]
+        A1 --> A2 --> A3
+    end
+
+    BEFORE ~~~ AFTER
+```
+
+**最容易誤判的地方：** Proxy 一直報 timeout，大家直覺會以為是 Proxy 壞了。system-tool 會先檢查 Proxy 的 CPU、記憶體是否正常；正常的話，就沿著依賴往下查，最後發現真正異常的是**外部服務商**。Proxy 只是「被連累」。
+
+---
+
+## 🔍 它是怎麼找到原因的？
+
+整個過程分 5 步，每 60 秒自動跑一次：
+
+```mermaid
+flowchart LR
+    S1["① 偵測<br/>📈<br/>哪些數字<br/>不正常？"] --> S2["② 判斷<br/>⚖️<br/>是真問題<br/>還是雜訊？"]
+    S2 --> S3["③ 追查<br/>🔗<br/>沿著服務<br/>依賴往下找"]
+    S3 --> S4["④ 推理<br/>🧠<br/>AI 根據證據<br/>判斷根因"]
+    S4 --> S5["⑤ 通知<br/>📨<br/>發給<br/>負責的人"]
+```
+
+| 步驟 | 白話說明 |
+|---|---|
+| ① 偵測 | 定期讀取 Prometheus（數據）和 Loki（日誌），和「平常的樣子」比較，找出異常的數字 |
+| ② 判斷 | 單一數字瞬間跳一下不算；要**持續異常**，或**多個相關訊號一起異常**，才算真的事故 |
+| ③ 追查 | 依照你設定的「誰依賴誰」，往下游一層一層檢查，同時查日誌、最近的部署和處理手冊 |
+| ④ 推理 | 本地 AI（Ollama／Qwen）根據收集到的證據判斷根因；AI 不可用時，自動改用規則判斷 |
+| ⑤ 通知 | 依負責團隊和嚴重度，發到 Slack／LINE／Email，附上證據和建議處置 |
+
+### 「沿著依賴往下找」是什麼意思？
+
+你只要描述一次服務之間的關係（`config/topology.yaml`），system-tool 就會照著它追查：
+
+```mermaid
+flowchart TD
+    NG["Nginx"] --> API["Payment API"]
+    API --> RD["Redis ✅ 正常"]
+    API --> DB["MariaDB ✅ 正常"]
+    API --> PX["Proxy ⚠️ timeout<br/>但 CPU / 記憶體正常"]
+    JOB["Payment Worker"] --> RD
+    JOB --> DB
+    JOB --> PX
+    PX --> PV["🔴 外部服務商<br/>延遲 0.8s → 39s<br/><b>← 真正的根因</b>"]
+
+    style PV fill:#fde2e1,stroke:#c62828,color:#000
+    style PX fill:#fff4e0,stroke:#ef6c00,color:#000
+    style RD fill:#e8f5e9,stroke:#2e7d32,color:#000
+    style DB fill:#e8f5e9,stroke:#2e7d32,color:#000
+```
+
+> 原則很簡單：**「自己異常，而且它依賴的東西都正常」的那一個，最可能是根因。** 它上面那些跟著出錯的服務，都只是被連累的「症狀」。
+
+---
+
+## 🏗️ 它會放在哪裡？
+
+system-tool 裝在**你自己的環境**（機房或你的雲端帳號），監控資料不會離開你的環境。被監控的正式主機**不用裝 AI**，只要裝標準的資料收集程式。
+
+```mermaid
+flowchart TB
+    subgraph PROD["你的正式環境（不需要改動）"]
+        direction LR
+        P1["Nginx"]
+        P2["API / Worker"]
+        P3["MariaDB"]
+        P4["Redis"]
+        P5["Proxy"]
+    end
+
+    subgraph ST["system-tool 主機（Docker）"]
+        direction TB
+        PR["Prometheus<br/>收數據"]
+        LK["Loki<br/>收日誌"]
+        GF["Grafana<br/>看圖表"]
+        RE["🧠 RCA Engine<br/>找根因"]
+        OL["Ollama / Qwen<br/>本地 AI"]
+        PR --> RE
+        LK --> RE
+        OL <--> RE
+        PR --> GF
+        LK --> GF
+    end
+
+    PROD -->|"exporter 送數據"| PR
+    PROD -->|"日誌收集器送日誌"| LK
+    RE --> NT["📨 Slack / LINE / Email"]
+```
+
+**安全承諾：** system-tool 是**唯讀**的。它只查詢數據和日誌，不會重啟服務、不會修改設定，也不會登入你的主機。
+
+---
+
+## 🔕 為什麼不會一直亂發告警？
+
+每個疑似問題都會**打分數**，分數夠高才通知：
+
+```mermaid
+flowchart LR
+    A["發現異常"] --> B{"打分數"}
+    B -->|"0～2 分"| C["🔇 忽略<br/>例：CPU 瞬間跳一下"]
+    B -->|"3～4 分"| D["📝 只記錄<br/>例：Queue 稍微堆積"]
+    B -->|"5 分以上"| E["🚨 通知負責人<br/>例：服務商逾時連帶 API 變慢"]
+```
+
+| 加分（越像真問題） | 扣分（越像雜訊） |
+|---|---|
+| 持續超過門檻 5 分鐘 **+2** | 只是瞬間尖峰 **−2** |
+| 跟平常比明顯異常 **+1** | 正在維護中 **−5** |
+| 嚴重超標（門檻 2 倍以上）**+2** | |
+| 多種訊號一起異常（例：延遲＋錯誤率）**+2** | |
+| 有依賴關係的服務一起異常 **+2** | |
+| 最近 30 分鐘有部署 **+1** | |
+
+同一個事件 30 分鐘內也不會重複通知。
+
+---
+
+## 🛡️ 為什麼 AI 不會亂講？
+
+AI 最大的風險是「講得很有自信，但內容是編的」。system-tool 的做法是：**AI 只能推理，不能自己寫證據。**
+
+```mermaid
+flowchart LR
+    A["系統先收集事實<br/>每筆給編號<br/>sig_01、log_03…"] --> B["AI 推理<br/>只能回答<br/>「根據 sig_01、log_03」"]
+    B --> C{"程式檢查"}
+    C -->|"編號都存在 ✅"| D["採用 AI 結論<br/>證據由程式組出來"]
+    C -->|"引用不存在的編號 ❌<br/>指認不存在的服務 ❌"| E["重試一次<br/>仍失敗就改用規則判斷"]
+    F["AI 掛掉 / 太慢"] -.-> E
+```
+
+另外還有兩道保險：
+
+- AI 指認的元件如果**沒有任何異常證據**，信心度會自動壓到 50% 以下。
+- 證據不足時會明確回答 **「unknown（需要人工調查）」**，不會硬掰一個答案。
+
+---
+
+## 🚀 5 分鐘快速體驗
+
+**不需要 Docker，也不需要真的故障。** 內建 11 個模擬故障情境：
 
 ```bash
-cd rca-engine
+git clone https://github.com/kingchen0617/system-tool.git
+cd system-tool/rca-engine
 pip install -r requirements.txt
-python -m app.cli simulate provider-timeout --no-llm   # 單一情境
-python -m app.cli evaluate --no-llm                    # 全部情境：Top-1/Top-3 準確率、誤報率
-python -m pytest -q                                    # 單元測試
+
+# 模擬一次「外部服務商逾時」
+python -m app.cli simulate provider-timeout --no-llm
 ```
 
-輸出範例：
+你會看到：
 
 ```
 🔴 [CRITICAL] INC-20261006-0001
@@ -93,10 +218,11 @@ python -m pytest -q                                    # 單元測試
 可疑元件：provider-api（信心度 85%，高度可能）
 根因判斷：External Payment Provider（external）延遲/錯誤率異常，沿依賴鏈影響上游服務：proxy → payment-api、payment-job
 證據：
-  • provider-api provider-latency: 目前 39.00 (基準 0.9882, z=26.7) 門檻 > 5.00
-  • provider-api provider-error-rate: 目前 0.4700 (基準 0.0135, z=14.8) 門檻 > 0.1000
-  • proxy proxy-cpu 正常（25.20）→ 非 proxy 本身資源不足
-  ...
+  • provider-api provider-latency: 目前 39.00 (基準 0.8100, z=332.2) 門檻 > 5.00
+  • provider-api provider-error-rate: 目前 0.4700 (基準 0.0086, z=85.1) 門檻 > 0.1000
+  • proxy proxy-cpu 正常（25.40）→ 非 proxy 本身資源不足
+  • payment-api api-cpu 正常（27.54）→ 非 payment-api 本身資源不足
+  • payment-job job-queue-depth 正常（298）→ 非 payment-job 本身資源不足
 已排除：mariadb、redis
 建議處置：
   1. 確認服務商狀態頁，並聯繫服務商技術窗口
@@ -105,217 +231,178 @@ python -m pytest -q                                    # 單元測試
 負責人：payment-team　（推理來源：rule）
 ```
 
-### B. 完整環境（Docker Compose）
+一次跑完全部情境，看準確率：
 
 ```bash
-cp .env.example .env           # 填入 Slack / LINE / SMTP 等設定
-docker compose up -d --build
-docker compose exec ollama ollama pull qwen3:4b   # 第一次下載模型
-
-# 用模擬情境跑完整流程（含 LLM 與通知）
-curl -X POST localhost:8000/test/incident -H 'Content-Type: application/json' \
-     -d '{"scenario":"provider-timeout","notify":true}'
-```
-
-| 服務 | 網址 |
-|---|---|
-| RCA Engine 首頁（事件列表） | http://localhost:8000 |
-| API 文件（Swagger） | http://localhost:8000/docs |
-| Grafana（admin / admin） | http://localhost:3000 |
-| Prometheus | http://localhost:9090 |
-
-> 如果主機上已經裝了 Ollama（例如 Windows 本機的 Qwen3:4b），可以刪掉 compose 裡的 `ollama` 服務，並在 `.env` 設定 `OLLAMA_URL=http://host.docker.internal:11434`。
-
----
-
-## 接上你的真實系統
-
-1. **Prometheus**：在 `observability/prometheus/prometheus.yml` 加入 exporters，包括 node_exporter、mysqld_exporter、redis_exporter、nginx exporter，以及應用程式的 `/metrics`。記得用 `service` label 對應 topology 的 id。
-2. **Loki**：用 Promtail／Grafana Alloy 收集 log，並加上 `service="<topology id>"` label。
-3. **`config/topology.yaml`**：描述服務、負責人（owner）、依賴（depends_on）和重要度（criticality）。
-4. **`config/rules.yaml`**：每條規則寫一個 PromQL（必須回傳單一序列，請先用 `sum`／`max` 聚合），再設定門檻、持續時間和 z-score。
-   - CPU 規則用的 `service` label，必須在 `prometheus.yml` 的 scrape target 加上 `labels: { service: ... }`，否則會一直沒有資料。
-   - 部署後先跑 `python -m app.cli detect --no-llm` 或打開 `GET /services`，檢查有沒有 `NO DATA` 的規則。
-   - `db-slow-query-rate` 量的是每秒新增的慢查詢數，不是查詢延遲本身。真正的 DB 延遲要等 v0.3 接上 trace 或 query duration histogram 後補上。
-5. **`config/notifications.yaml`**：設定 owner 對應的通知管道和收件人。
-6. **CI/CD**：部署完成後呼叫 `POST /changes`，RCA 才能關聯「最近變更」：
-
-```bash
-curl -X POST localhost:8000/changes -H 'Content-Type: application/json' \
-     -d '{"service":"payment-api","type":"deployment","description":"release v2.14.0"}'
-```
-
----
-
-## 授權（v0.3）
-
-採用「地端安裝 + 線上授權」，詳細說明見 **[LICENSING.md](LICENSING.md)**。
-
-- **方案：** Community（無授權，5 個服務）／Professional／Business／Enterprise。差別在可監控的服務數、AI RCA、通知、變更關聯、RAG 等功能。
-- **啟用方式：** 設定 `LICENSE_KEY` 和 `LICENSE_SERVER_URL`，啟動後會自動線上啟用，之後每 12 小時續驗一次。
-- **離線容忍：** 連不上授權伺服器時，租期（7 天）內正常運作，之後還有 14 天寬限期，過了才降級為 Community。降級不會停止監控。
-- **離線授權：** Enterprise 方案可使用離線授權，不需連線。
-- **授權伺服器：** 程式在 `license-server/`，由賣方部署，**不可交給客戶**。
-
-```bash
-python -m app.cli license status                 # 查看授權
-python -m app.cli license activate ST1.xxxx...   # 啟用
-curl localhost:8000/license
-```
-
-## API
-
-| Method | Path | 說明 |
-|---|---|---|
-| GET | `/health` | 引擎、LLM 狀態 |
-| GET | `/services` | 各服務目前狀態（ok／abnormal／no_data） |
-| GET | `/signals` | 最近一次偵測的所有訊號 |
-| GET | `/incidents` | 事件列表 |
-| GET | `/incidents/{id}` | 事件詳情（含 RCA、證據、工具呼叫稽核紀錄） |
-| POST | `/rca/{id}` | 重新執行 RCA |
-| POST | `/detect/run` | 立即執行一次偵測 |
-| GET | `/test/scenarios` | 可用的模擬情境 |
-| POST | `/test/incident` | 執行模擬情境 `{"scenario":"db-latency","notify":false,"use_llm":true}` |
-| POST | `/changes` | 登錄部署或設定變更 |
-| POST | `/maintenance` | 設定維護時段 `{"service":"mariadb","minutes":60}` |
-| POST | `/incidents/{id}/feedback` | 工程師回饋 RCA 是否正確，累積評估資料集（Business 以上） |
-| GET | `/license` | 授權狀態、生效方案、功能、監控中的服務 |
-| POST | `/license` | 設定 License Key 並線上啟用 |
-| POST | `/license/refresh` | 立即續驗 |
-| POST | `/license/deactivate` | 停用本機（換主機前執行） |
-
-`/changes`、`/maintenance` 需要 Professional 以上；目前方案不含該功能時回傳 HTTP 402。設定 `ENGINE_ADMIN_TOKEN` 後，`/license` 的 POST 操作需帶 `X-Admin-Token` header。
-
-### RCA 輸出格式
-
-```json
-{
-  "incident_id": "INC-20261006-0001",
-  "status": "critical",
-  "affected_service": "payment-api",
-  "suspected_component": "provider-api",
-  "root_cause": "…",
-  "confidence": 0.85,
-  "confidence_label": "likely",
-  "reasoning_source": "llm | rule",
-  "model": "qwen3:4b",
-  "evidence": [{"type": "metric", "source": "prometheus", "description": "…"}],
-  "ruled_out": [{"component": "mariadb", "reason": "所有監控指標正常…"}],
-  "alternatives": [],
-  "recommended_actions": [{"priority": 1, "action": "…"}],
-  "owner": "payment-team",
-  "generated_at": "2026-10-06T12:00:00Z"
-}
-```
-
----
-
-## 降低誤報的評分機制（`rules.yaml → scoring`）
-
-每一項代表一個**獨立的證據**。訊號種類本身（例如「是錯誤率」）不會加分，避免重複計分。
-
-| 條件 | 分數 |
-|---|---|
-| 固定門檻「持續」超標（整段 `for` 期間） | +2 |
-| 動態基準異常（和門檻高度相關，只加 1） | +1 |
-| critical 規則超過門檻 2 倍以上 | +2 |
-| 兩種以上不同類型的訊號（latency／errors／saturation）同時異常 | +2 |
-| 有依賴關係的多個服務同時異常 | +2 |
-| 30 分鐘內有部署／設定變更 | +1 |
-| 只是瞬間尖峰 | −2 |
-| 維護中（全部異常服務都在維護 → 直接抑制） | −5 |
-
-**≥5 為 Incident，會通知**；3–4 為 Warning，只記錄不通知；<3 會被抑制。
-
-舉例：單一訊號輕微超標只有 2+1 = 3 分，是 Warning；API 5xx 衝到 40% 則是 2+1+2 = 5 分，會通知。
-
-### 動態基準（穩健 z-score）
-
-```
-|←──────── baseline（window, 預設 60 分）────────→|←─ guard（10 分）─→|←─ recent（for, 5 分）─→| now
-z = (recent 平均 − baseline 中位數) / (1.4826 × MAD)
-```
-
-- **guard band**：事故已經持續一段時間時，前段的異常資料不會被算進 baseline，避免 z-score 被拉低。
-- **median + MAD**：比平均值加標準差更不受歷史尖峰影響。同一事件在 cooldown 期間（預設 30 分鐘）內不重複通知。
-
----
-
-## 模擬情境與驗收
-
-`examples/sample-incidents/` 目前有 11 個情境：
-
-- **一般故障：** 服務商逾時、DB 慢查詢、DB 連線耗盡、Redis 延遲、部署回歸、Proxy 資源耗盡。
-- **v0.2 新增：**
-  - 持續 15 分鐘的 DB 問題（測 baseline 不被污染）
-  - 只有 API 5xx 但很嚴重（測單一嚴重訊號仍會通知）
-  - Redis 和 MariaDB 同時異常（測多候選時會降低信心度）
-- **不應通知：** CPU 瞬間尖峰（應抑制）、Queue 堆積（只列 Warning）。
-
-情境檔可以用 `acceptable_root_causes` 列出可接受的答案，用 `max_confidence` 設定信心度上限。模稜兩可的情境如果給出過高的信心度，會被判定為錯誤。
-
-```
 python -m app.cli evaluate --no-llm
-Top-1 準確率：9/9 = 100%
-Top-3 準確率：9/9 = 100%
-誤報：0/2
+# Top-1 準確率：9/9 = 100%　Top-3 準確率：9/9 = 100%　誤報：0/2
 ```
 
-驗收目標：真實故障案例 Top-3 準確率 ≥80%、誤報率 <10%、RCA 在 60 秒內完成。之後請把**真實發生過的故障**也做成情境檔加進來，持續累積評估資料集。
+<details>
+<summary>📋 內建的 11 個模擬情境</summary>
+
+| 情境 | 正確答案 |
+|---|---|
+| `provider-timeout` 外部服務商逾時（Proxy 本身正常） | 外部服務商 |
+| `proxy-saturation` Proxy 資源耗盡 | Proxy |
+| `db-latency` 資料庫慢查詢暴增 | MariaDB |
+| `db-connection-exhaustion` 資料庫連線數耗盡 | MariaDB |
+| `db-slow-burn` 資料庫問題已持續 15 分鐘 | MariaDB |
+| `redis-latency` Redis 延遲升高 | Redis |
+| `deployment-regression` 部署後應用程式出錯 | Payment API（部署回歸） |
+| `api-5xx-only-severe` 只有 API 錯誤率暴增 | Payment API |
+| `multi-root-redis-db` Redis 和資料庫同時異常 | 列出兩個候選，並降低信心度 |
+| `cpu-spike-momentary` CPU 瞬間尖峰 | 不應通知 |
+| `queue-backlog-warning` Queue 輕微堆積 | 只記錄，不通知 |
+
+</details>
 
 ---
 
-## 專案結構
+## 🐳 完整安裝（Docker）
 
+```bash
+cp .env.example .env                               # 1. 複製設定檔（通知管道、授權等）
+docker compose up -d --build                       # 2. 啟動全部服務
+docker compose exec ollama ollama pull qwen3:4b    # 3. 第一次下載 AI 模型
+
+# 4. 跑一次完整流程（含 AI 推理）
+curl -X POST localhost:8000/test/incident -H 'Content-Type: application/json' \
+     -d '{"scenario":"provider-timeout","notify":false}'
 ```
-system-tool/
-├── docker-compose.yml / .env.example / Makefile
-├── config/
-│   ├── topology.yaml          # Service Graph
-│   ├── rules.yaml             # 偵測規則 + 評分
-│   └── notifications.yaml     # 告警路由
-├── rca-engine/
-│   ├── Dockerfile / requirements.txt
-│   ├── app/
-│   │   ├── main.py            # FastAPI + 背景偵測迴圈
-│   │   ├── cli.py             # simulate / evaluate / detect
-│   │   ├── engine.py          # 串接整個流程
-│   │   ├── detection.py       # 門檻、z-score、關聯、評分
-│   │   ├── topology.py        # 服務拓撲
-│   │   ├── datasource.py      # Prometheus / Loki / 模擬資料
-│   │   ├── tools.py           # Agent 白名單工具 + 稽核
-│   │   ├── orchestrator.py    # 收集證據 → 推理
-│   │   ├── rule_rca.py        # 規則式 RCA
-│   │   ├── llm_rca.py         # Ollama / Qwen RCA
-│   │   ├── knowledge.py       # Runbook 檢索（RAG v0）
-│   │   ├── notifications.py   # Slack / LINE / Email
-│   │   ├── store.py           # 事件儲存（JSON）
-│   │   ├── licensing.py       # 授權用戶端（簽章驗證、線上啟用、方案限制）
-│   │   ├── license_keys.py    # 授權方公鑰
-│   │   ├── models.py          # Pydantic schema
-│   │   └── config.py
-│   └── tests/test_rca.py
-├── license-server/            # 授權伺服器 + 簽發工具（賣方使用，不出貨給客戶）
-│   ├── app/{tokens,core,editions,admin,main}.py
-│   └── docker-compose.yml
-├── LICENSE / EULA.md / LICENSING.md / THIRD_PARTY_NOTICES.md
-├── observability/             # Prometheus / Loki / Grafana 設定
-└── examples/
-    ├── runbooks/              # Markdown runbook（含 front matter）
-    └── sample-incidents/      # 模擬情境
+
+啟動後可以打開：
+
+| 畫面 | 網址 |
+|---|---|
+| 🏠 system-tool 首頁（事件列表、授權狀態） | http://localhost:8000 |
+| 📘 API 文件 | http://localhost:8000/docs |
+| 📊 Grafana（帳密 admin / admin） | http://localhost:3000 |
+| 📈 Prometheus | http://localhost:9090 |
+
+> 💡 已經在主機上裝了 Ollama？可以刪掉 `docker-compose.yml` 裡的 `ollama`，並在 `.env` 設定 `OLLAMA_URL=http://host.docker.internal:11434`。
+
+**建議的驗證順序：**
+
+```mermaid
+flowchart LR
+    V1["pytest<br/>單元測試"] --> V2["evaluate<br/>模擬情境"] --> V3["docker compose up"] --> V4["/health<br/>AI 可用？"] --> V5["模擬故障<br/>＋ AI 推理"] --> V6["關掉 Ollama<br/>確認自動改用規則"]
 ```
 
 ---
 
-## Roadmap
+## 🔌 接上你的系統
 
-- [x] v0.2：LLM 只能引用證據 ID、PromQL 修正、多候選 RCA、評分去重、穩健 baseline（median＋MAD＋guard band）
-- [x] v0.3：商業授權（線上啟用 + 離線授權、方案分級、授權伺服器、EULA、第三方授權聲明）
-- [ ] 出貨強化：Nuitka／Cython 編譯核心模組、只提供簽章過的 Docker image、自動產生 SBOM
-- [ ] Tempo／OpenTelemetry traces，加入 `query_tempo` 工具，補上真正的 DB／upstream latency
-- [ ] 季節性 baseline（同時段、上週同時段）
-- [ ] AWS connector：CloudWatch、CloudTrail、AWS Config、AWS Health
-- [ ] 混合 LLM：本地 Qwen 信心度 <70% 時，交給雲端大模型做深度 RCA
-- [ ] RAG 換成 PostgreSQL + pgvector，納入歷史事件的相似度檢索
-- [ ] Web UI：事件時間軸、拓撲圖、回饋按鈕
-- [ ] 經人工核准後執行修復動作（Human-approved Remediation）
+```mermaid
+flowchart LR
+    C1["① 裝資料收集程式<br/>exporter / 日誌收集器"] --> C2["② 畫服務關係<br/>topology.yaml"] --> C3["③ 設定偵測規則<br/>rules.yaml"] --> C4["④ 設定通知<br/>notifications.yaml"] --> C5["⑤ 部署時通知<br/>POST /changes"]
+```
+
+| 步驟 | 要做什麼 | 設定檔 |
+|---|---|---|
+| ① 收集資料 | 在主機裝 node_exporter、mysqld_exporter、redis_exporter、nginx exporter；日誌用 Promtail／Grafana Alloy 送到 Loki。記得加上 `service` 標籤 | `observability/prometheus/prometheus.yml` |
+| ② 服務關係 | 寫下每個服務的負責人、依賴誰、重要程度 | `config/topology.yaml` |
+| ③ 偵測規則 | 每條規則一個 PromQL，再設定門檻和持續時間 | `config/rules.yaml` |
+| ④ 通知 | 哪個團隊、什麼嚴重度，發到哪個管道 | `config/notifications.yaml` |
+| ⑤ 變更關聯 | CI/CD 部署完成後呼叫 API，系統才能判斷「是不是剛部署造成的」 | – |
+
+`topology.yaml` 長這樣，很直觀：
+
+```yaml
+- id: payment-api
+  name: Payment API (Laravel)
+  owner: payment-team          # 出事通知誰
+  criticality: P1              # 重要程度
+  depends_on: [redis, mariadb, proxy]   # 它依賴誰
+```
+
+> ⚠️ 設定完先執行 `python -m app.cli detect --no-llm`，確認沒有規則顯示 `NO DATA`（代表查不到數據，通常是標籤沒對上）。
+
+---
+
+## 💼 方案與授權
+
+system-tool 是**商業授權軟體**，採「裝在你的環境 + 線上授權」。沒有授權時，會以免費的 Community 方案運作。
+
+| | Community | Professional | Business | Enterprise |
+|---|:---:|:---:|:---:|:---:|
+| 可監控服務數 | 5 | 50 | 200 | 不限 |
+| 規則式根因分析 | ✅ | ✅ | ✅ | ✅ |
+| AI 根因分析（Ollama／Qwen） | | ✅ | ✅ | ✅ |
+| Slack／LINE／Email 通知 | | ✅ | ✅ | ✅ |
+| 部署變更關聯、維護時段 | | ✅ | ✅ | ✅ |
+| 工程師回饋資料集、歷史事件檢索 | | | ✅ | ✅ |
+| 雲端 AI、AWS、SSO、高可用 | | | | ✅ |
+| 離線授權（不需連網） | | | | ✅ |
+
+```mermaid
+flowchart LR
+    K["輸入 License Key"] --> A["連線授權伺服器啟用"] --> V["✅ 正常使用<br/>每 12 小時自動續驗"]
+    V -->|"網路斷了"| G["⏳ 照常運作<br/>7 天租期 + 14 天寬限"]
+    G -->|"恢復連線"| V
+    G -->|"寬限期也過了"| C["⬇️ 降為 Community<br/>不會停止監控、不刪資料"]
+```
+
+```bash
+python -m app.cli license activate ST1.xxxx...   # 啟用
+python -m app.cli license status                 # 查看狀態
+```
+
+詳細說明見 [LICENSING.md](LICENSING.md)，授權條款見 [LICENSE](LICENSE) 與 [EULA](EULA.md)，第三方元件授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+---
+
+## ❓ 常見問題
+
+<details>
+<summary><b>會把我的監控資料傳出去嗎？</b></summary>
+
+不會。AI 跑在你自己的主機上（Ollama）。授權續驗只會傳送授權編號、主機識別碼和版本，**不含任何監控資料**。使用量統計（服務數、事件數）要你自己開啟 `TELEMETRY_OPT_IN=true` 才會傳。
+</details>
+
+<details>
+<summary><b>AI 掛掉或太慢怎麼辦？</b></summary>
+
+會自動改用規則式判斷，監控不會中斷。可以用 `docker compose stop ollama` 再跑一次模擬情境來驗證。
+</details>
+
+<details>
+<summary><b>會不會自動幫我重啟服務或改設定？</b></summary>
+
+不會。目前完全唯讀，只提供建議處置，由工程師決定是否執行。「人工核准後自動處置」列在 Roadmap 上。
+</details>
+
+<details>
+<summary><b>它跟 Grafana、夜鶯這類監控系統有什麼不同？</b></summary>
+
+那些系統負責「看見問題」（哪裡異常）；system-tool 負責「理解問題」（為什麼異常、哪個才是根因、證據是什麼）。它可以讀取你現有的 Prometheus／Loki 資料，不需要換掉原本的監控。詳見 [產品定位與流程圖](docs/product-flowcharts.md)。
+</details>
+
+<details>
+<summary><b>判斷錯了怎麼辦？</b></summary>
+
+每次判斷都會附上證據、已排除項目和其他候選，方便人工確認。工程師可以透過 `POST /incidents/{id}/feedback` 回報對錯和真正的原因，系統會累積成資料集，讓之後判斷得更準（Business 方案以上）。
+</details>
+
+---
+
+## 📚 文件導覽
+
+| 文件 | 內容 | 適合誰 |
+|---|---|---|
+| [docs/product-flowcharts.md](docs/product-flowcharts.md) | 產品定位、目標架構、六大差異化流程圖 | 主管、客戶、合作夥伴 |
+| [docs/technical-guide.md](docs/technical-guide.md) | 根因演算法、評分細節、API 清單、輸出格式、專案結構 | 開發者、導入工程師 |
+| [LICENSING.md](LICENSING.md) | 授權機制、授權伺服器架設、簽發授權 | 你（賣方）、客戶 IT |
+| [CHANGELOG.md](CHANGELOG.md) | 各版本更新內容 | 所有人 |
+
+### Roadmap
+
+```mermaid
+flowchart LR
+    V1["v0.1 ✅<br/>偵測＋規則判斷<br/>＋通知"] --> V2["v0.2 ✅<br/>AI 防亂講<br/>多候選判斷"] --> V3["v0.3 ✅<br/>商業授權"] --> V4["v0.4<br/>AI 自己一步步<br/>調查根因"]:::next --> V5["v0.5<br/>故障傳播圖<br/>設定層根因"] --> V6["v0.6<br/>從回饋中學習<br/>越用越準"]
+    classDef next fill:#e8f5e9,stroke:#2e7d32,color:#000
+```
+
+---
+
+<sub>© 2026 [授權方名稱]. All rights reserved. 本軟體為專有軟體，未經授權不得重製、散布或使用。</sub>
