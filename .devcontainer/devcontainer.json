@@ -1,0 +1,27 @@
+{
+  "name": "system-tool",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb"
+  },
+  "postCreateCommand": "pip install -r rca-engine/requirements.txt pytest",
+  "postStartCommand": "bash .devcontainer/start.sh",
+  "forwardPorts": [8000, 3000, 9090],
+  "portsAttributes": {
+    "8000": { "label": "system-tool 主介面", "onAutoForward": "openBrowser" },
+    "3000": { "label": "Grafana（admin / admin）", "onAutoForward": "notify" },
+    "9090": { "label": "Prometheus", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "codespaces": {
+      "openFiles": ["README.md"]
+    },
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-azuretools.vscode-docker"]
+    }
+  }
+}
