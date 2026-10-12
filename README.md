@@ -198,6 +198,20 @@ flowchart LR
 
 ## 🚀 5 分鐘快速體驗
 
+### ☁️ 不用安裝：在瀏覽器直接開（GitHub Codespaces）
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kingchen0617/system-tool?quickstart=1)
+
+1. 點上面的按鈕（需登入 GitHub），按「Create codespace」
+2. 等 3～5 分鐘，系統會自動啟動 RCA Engine、Prometheus、Loki、Grafana，並灌入 5 個示範事故
+3. 瀏覽器會自動打開 **8000 埠**（主介面）；沒有的話到下方「連接埠 (Ports)」分頁點 8000 的地球圖示
+4. Grafana 在 **3000 埠**（帳密 admin / admin）
+
+> Codespaces 預設**關閉 AI（LLM）**，改用規則式 RCA，避免機器資源不足。想試 AI 版：把 `.env` 的 `LLM_ENABLED` 改成 `true`，執行 `docker compose up -d ollama && make pull-model && docker compose restart rca-engine`（建議選 4 核以上機器）。
+> 用完記得到 [github.com/codespaces](https://github.com/codespaces) 停止或刪除，避免用掉免費額度。
+
+### 💻 在自己電腦上跑
+
 **不需要 Docker，也不需要真的故障。** 內建 11 個模擬故障情境：
 
 ```bash
